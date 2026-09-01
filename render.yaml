@@ -1,0 +1,43 @@
+# Klipvia on Render — a static site, because there is nothing to run.
+#
+# The editor keeps its projects in IndexedDB and its footage in the Origin
+# Private File System, and renders with WebCodecs in the visitor's own browser.
+# So the host serves files and does nothing else: no disk, no database, no
+# ffmpeg, no login, and no way for one visitor's work to reach another's.
+services:
+  - type: web
+    name: klipvia
+    runtime: static
+    staticPublishPath: ./public
+    buildCommand: ""
+    routes:
+      # A single page that owns its own routing.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: Origin-Trial
+        # WebMCP is in a Chrome origin trial (149–156). Register the deployed
+        # origin at the Chrome origin trials console and paste the token here;
+        # without it a visitor has to set chrome://flags/#enable-webmcp-testing
+        # by hand before the editor's tools appear to an agent.
+        value: REPLACE_WITH_YOUR_WEBMCP_ORIGIN_TRIAL_TOKEN
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+      # The app ships as unbundled ES modules with stable names, so nothing
+      # carries a content hash. Without revalidation a redeploy serves some
+      # visitors a mix of old and new modules — which fails in ways that look
+      # like logic bugs, because a stale module against a fresh one is exactly
+      # that. Only the two directories whose contents never change under the
+      # same name are cached hard.
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+      - path: /vendor/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /brand/*
+        name: Cache-Control
+        value: public, max-age=604800

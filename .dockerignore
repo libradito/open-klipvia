@@ -1,0 +1,44 @@
+# Nothing here belongs in an image.
+.git
+.gitignore
+.github
+.claude
+.DS_Store
+**/.DS_Store
+
+# Reinstalled inside the image against the lockfile.
+node_modules
+
+# Someone's actual work. An image that shipped these would ship their footage.
+data
+samples
+
+# Docs, deploy config for other hosts, and the build's own inputs.
+README.md
+LICENSE
+render.yaml
+timeline.jpeg
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+.env
+.env.*
+
+# Inside public/, the parts that are not the application.
+#
+# Everything here is served to every visitor, so anything that is not needed at
+# runtime is bytes down someone's connection for nothing.
+#
+#   brand/source   the logo masters — kept in the repository, not shipped
+#   subtitles.d.ts types for the server's TypeScript; the browser never reads it
+#   _headers       Netlify and Cloudflare read these from the repository, not
+#   _redirects     from an image, and nginx has the same rules in its own config
+#
+# public/vendor/mp4-muxer.LICENSE stays: it is MIT and the licence has to travel
+# with the code.
+public/brand/source
+public/subtitles.d.ts
+public/_headers
+public/_redirects
+public/**/README.md

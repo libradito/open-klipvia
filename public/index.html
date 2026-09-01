@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Klipvia — animation, video and sound → one edit</title>
+<!-- WebMCP is in a Chrome origin trial. A deployed origin needs its own token
+     (register at the Chrome origin trials console) for `document.modelContext`
+     to exist without the visitor setting a flag by hand. The server sets the
+     same thing as a header when there is one; this covers static hosting.
+     Left empty on purpose — an invalid token is worse than none. -->
+<meta http-equiv="origin-trial" content="">
+<link rel="icon" href="/brand/favicon.png" sizes="96x96">
+<link rel="apple-touch-icon" href="/brand/icon-180.png">
+<meta name="theme-color" content="#0e1013">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body data-mode="clip">
+
+<header class="topbar">
+  <button id="btnRailToggle" class="icon-btn on" data-tip="Show or hide the left rail — timelines, clips, media, text and assets." data-tip-key="[" data-tip-at="bottom" aria-label="Toggle left rail">◧</button>
+  <!-- Not a link: in a single-page editor there is nowhere to go, and a stray
+       click on the logo reloading the app is the last thing anyone wants. -->
+  <div class="brand" role="img" aria-label="Klipvia">
+    <img class="brand-word" src="/brand/klipvia-wordmark.png" alt="" width="56" height="20" decoding="async">
+    <img class="brand-mark" src="/brand/klipvia-mark.png" alt="" width="18" height="20" decoding="async">
+  </div>
+
+  <div class="modes" role="tablist" aria-label="Editor mode">
+    <button class="mode-btn active" data-setmode="clip" role="tab"
+            data-tip="Author one animation: HTML, CSS and JS against a virtual clock.\nThis is where overlays, titles and stings are made." data-tip-at="bottom">Clip</button>
+    <button class="mode-btn" data-setmode="seq" role="tab"
+            data-tip="Cut the whole piece: video, audio, animation layers and captions on one timeline." data-tip-at="bottom">Timeline</button>
+  </div>
+
+  <input id="projectName" class="project-name" spellcheck="false" aria-label="Project name" data-tip="The project name. Rename it here; it is what the Projects dialog lists." data-tip-at="bottom">
+  <div class="spacer"></div>
+  <span id="statusLine" class="status-line"></span>
+  <span id="saveState" class="save-state" data-tip="Changes save automatically a moment after you stop typing." data-tip-at="bottom">saved</span>
+  <span id="ffmpegState" class="pill" data-tip-at="bottom">ffmpeg …</span>
+  <span id="mcpState" class="pill" role="button" tabindex="0" data-tip-at="bottom">webmcp …</span>
+  <button id="btnSpeech" class="icon-btn" data-tip="Transcription and voice.\nWrite down what is said in a clip, or read a script aloud — with your computer's own voices, a model on your machine, or a provider." data-tip-at="bottom" aria-label="Transcription and voice">🎙</button>
+  <button id="btnProjects" class="btn ghost" data-tip="Open, rename, duplicate or delete projects." data-tip-at="bottom">Projects</button>
+  <button id="btnInspToggle" class="icon-btn on" data-tip="Show or hide the inspector on the right." data-tip-key="]" data-tip-at="bottom" aria-label="Toggle inspector">◨</button>
+</header>
+
+<main class="app">
+
+  <!-- ─────────────────────────────── left rail ─────────────────────────── -->
+  <aside class="rail">
+    <div class="rail-tabs" role="tablist">
+      <button class="rail-tab" data-rail="timelines" role="tab" data-tip="The main timeline, its sections, and timelines placed nowhere yet.">Timelines</button>
+      <button class="rail-tab active" data-rail="clips" role="tab" data-tip="Animation clips in this project.">Clips</button>
+      <button class="rail-tab" data-rail="media" role="tab" data-tip="Imported video and audio.">Media</button>
+      <button class="rail-tab" data-rail="text" role="tab" data-tip="Imported transcripts: SRT, WebVTT or Whisper JSON.">Text</button>
+      <button class="rail-tab" data-rail="assets" role="tab" data-tip="Images and fonts a clip can reference.">Assets</button>
+    </div>
+
+    <section class="rail-section timelines-section hidden" data-rail-panel="timelines">
+      <div class="panel-head">
+        <h2>Timelines</h2>
+        <button id="btnNewSub" class="btn small" data-tip="A new, empty sub-timeline: placed at the playhead of the open timeline, five seconds long, and opened." data-tip-at="right">+</button>
+      </div>
+      <div id="timelineList" class="tl-list"></div>
+      <p class="rail-hint">Click opens · drag a row onto a track to place it as a section · ▲▼ reorder sections · ★ make it the main timeline · ✎ rename</p>
+    </section>
+
+    <section class="rail-section clips-section" data-rail-panel="clips">
+      <div class="panel-head">
+        <h2>Clips</h2>
+        <button id="btnAddClip" class="btn small" data-tip="Add a clip to this project." data-tip-at="right">+</button>
+      </div>
+      <ul id="clipList" class="clip-list"></ul>
+      <p class="rail-hint">In Timeline mode, drag a clip onto a track to use it as an overlay.</p>
+    </section>
+
+    <section class="rail-section media-section hidden" data-rail-panel="media">
+      <div class="panel-head">
+        <h2>Media</h2>
+        <button id="btnImportMedia" class="btn small" data-tip="Import video or audio.\nYou can also drop files anywhere in the window." data-tip-at="right">+</button>
+        <input id="mediaInput" type="file" multiple hidden
+               accept=".mp4,.m4v,.mov,.webm,.mkv,.avi,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus">
+      </div>
+      <div id="mediaGrid" class="media-grid"></div>
+      <p class="rail-hint">Drag onto a track · click to insert at the playhead · images live in Assets and drag onto tracks from there</p>
+    </section>
+
+    <section class="rail-section text-section hidden" data-rail-panel="text">
+      <div class="panel-head">
+        <h2>Titles</h2>
+        <span class="hint" data-tip="Ready-made animated text. Click to add one at the playhead, or drag it onto a track; type into it in the inspector.">presets</span>
+      </div>
+      <div id="titleGrid" class="title-grid"></div>
+      <div class="panel-head">
+        <h2>Transcripts</h2>
+        <button id="btnVoiceOver" class="btn small ghost" data-tip="Write a script and have it read aloud — by your computer's own voice to hear and time it, or by a voice that records into your video." data-tip-at="right">Voice-over…</button>
+        <button id="btnImportText" class="btn small" data-tip="Import an .srt, .vtt or Whisper .json.\nA file named like its media links to it automatically." data-tip-at="right">+</button>
+        <input id="textInput" type="file" multiple hidden accept=".srt,.vtt,.json">
+      </div>
+      <div id="transcriptList" class="tr-list"></div>
+      <p class="rail-hint">Cue times are source times, so captions follow their footage through a trim.</p>
+    </section>
+
+    <section class="rail-section assets-section hidden" data-rail-panel="assets">
+      <div class="panel-head">
+        <h2>Assets</h2>
+        <button id="btnUpload" class="btn small" data-tip="Add images or fonts.\nYou can also drop files anywhere in the window, or press ⌘V to paste an image." data-tip-at="right">+</button>
+        <input id="fileInput" type="file" multiple hidden
+               accept=".png,.jpg,.jpeg,.webp,.gif,.avif,.svg,.woff2,.woff,.ttf,.otf">
+      </div>
+      <div id="assetGrid" class="asset-grid"></div>
+      <p class="rail-hint">Drop files anywhere · ⌘V pastes an image · click to insert · in Timeline mode, click or drag an image onto a track</p>
+    </section>
+  </aside>
+
+  <!-- ─────────────────────────────── centre ────────────────────────────── -->
+  <section class="centre">
+    <div class="col-resize left" id="railResize" data-tip="Drag to resize the rail. Drag it shut to hide it; double-click resets."></div>
+    <div class="col-resize right" id="inspResize" data-tip="Drag to resize the inspector. Drag it shut to hide it; double-click resets."></div>
+
+    <div class="stage-area" id="stageArea">
+      <div id="stageWrap" class="stage-wrap" data-mode="clip"></div>
+      <div id="seqStageWrap" class="stage-wrap seq-wrap" data-mode="seq">
+        <div id="seqStage" class="seq-stage"></div>
+        <div id="stageOverlay" class="stage-tools"></div>
+      </div>
+      <div class="stage-hud">
+        <span id="stageDims" class="hud-chip" data-tip="Frame size and the zoom the preview is shown at." data-tip-at="bottom">—</span>
+        <div class="zoom">
+          <button class="zoom-btn" data-zoom="fit" data-tip="Shrink the preview to fit the panel." data-tip-at="bottom">Fit</button>
+          <button class="zoom-btn" data-zoom="0.5" data-tip="Half size." data-tip-at="bottom">50%</button>
+          <button class="zoom-btn" data-zoom="1" data-tip="True pixels. Scroll the stage area to pan." data-tip-at="bottom">100%</button>
+        </div>
+      </div>
+
+      <!-- First run on a hosted build: what to try, and how to turn an agent on.
+           Written by initAgentHint(); removed for good the moment it is closed.
+           Inside the stage area so it can never sit over the timeline. -->
+      <div class="agent-hint hidden" id="agentHint" hidden></div>
+    </div>
+
+    <!-- clip mode: animation tracks -->
+    <div class="timeline-panel" data-mode="clip">
+      <div class="transport">
+        <button id="btnPlay" class="btn play" data-tip="Play or pause the preview." data-tip-key="Space">▶</button>
+        <span id="timeLabel" class="time">0.00 / 0.00s</span>
+        <label class="loop" data-tip="Restart when the clip ends.\nEach loop rebuilds from frame 0, because the clock only runs forward."><input type="checkbox" id="chkLoop" checked> loop</label>
+        <div class="spacer"></div>
+        <span class="hint">Space play · ←→ frame · ⇧←→ second · right-click for menus</span>
+      </div>
+      <div id="timeline" class="timeline">
+        <div id="ruler" class="ruler"></div>
+        <div id="tracks" class="tracks"></div>
+        <div id="playhead" class="playhead"></div>
+        <div id="tlBubble" class="tl-bubble"></div>
+      </div>
+    </div>
+
+    <!-- timeline mode: the edit -->
+    <div class="timeline-panel seq-panel" id="seqPanel" data-mode="seq">
+      <div class="panel-resize" id="seqResize" data-tip="Drag to give the timeline more or less room."></div>
+      <div class="transport">
+        <div id="seqCrumb" class="seq-crumb" data-tip="Where you are. Click a crumb to go back up." data-tip-key="⌘↑"></div>
+        <button id="btnSeqPlay" class="btn play" data-tip="Play or pause the timeline." data-tip-key="Space">▶</button>
+        <span id="seqTimeLabel" class="time">0:00.00 / 0:00.00</span>
+        <div class="tl-tools">
+          <button id="btnSplit" class="btn ghost small" data-tip="Cut the selected item at the playhead." data-tip-key="S">Split</button>
+          <button id="btnDeleteItem" class="btn ghost small" data-tip="Remove the selected item, leaving a gap." data-tip-key="⌫">Delete</button>
+          <button id="btnRipple" class="btn ghost small" data-tip="Remove the selected item and close the gap behind it." data-tip-key="⇧⌫">Ripple</button>
+          <button id="btnAddTrack" class="btn ghost small" data-tip="Add another video track above, or an audio track below.">+ Track</button>
+          <span class="tl-sep"></span>
+          <button id="btnUndo" class="btn ghost small" disabled data-tip="Undo the last edit to the timeline." data-tip-key="⌘Z">↶</button>
+          <button id="btnRedo" class="btn ghost small" disabled data-tip="Redo." data-tip-key="⌘⇧Z">↷</button>
+          <span class="tl-sep"></span>
+          <button id="btnGaps" class="btn ghost small toggle" data-tip="Show detected silence as bands on every item with sound.\nTune the threshold in the item inspector.">Gaps</button>
+          <span class="tl-sep"></span>
+          <button id="btnParts" class="btn ghost small" data-tip="Export items as separate files — picture, sound (WAV for a voice tool), titles, captions, the words — or a stretch of the whole mix.">📤</button>
+          <div class="menu-wrap">
+            <button id="btnFrame" class="btn ghost small" data-tip="Grab frames, frame series, sprite sheets or sub-clips from the footage — into Assets and Media, for clips and for agents.">📷</button>
+            <div id="frameMenu" class="menu hidden">
+              <button data-act="footage" data-tip="The raw footage under the playhead, without overlays, as a PNG in Assets.">Footage frame → Assets</button>
+              <button data-act="composite" data-tip="Everything the preview shows at this instant, as a PNG in Assets.">Composited frame → Assets</button>
+              <button data-act="extract" data-tip="Frame series, sprite sheets or sub-clips from a stretch of footage.">Extract…</button>
+            </div>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <div class="tl-zoom">
+          <button id="btnZoomOut" class="btn ghost small" data-tip="Zoom the timeline out.">−</button>
+          <button id="btnZoomFit" class="btn ghost small" data-tip="Fit the whole timeline in view.">Fit</button>
+          <button id="btnZoomIn" class="btn ghost small" data-tip="Zoom the timeline in.">+</button>
+        </div>
+      </div>
+      <div id="seqTimeline" class="seq-timeline"></div>
+    </div>
+
+    <div class="code-panel" id="codePanel" data-mode="clip">
+      <div class="panel-resize" id="codeResize" data-tip="Drag to resize the code panel."></div>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-pane="html" role="tab" data-tip="The markup of the clip — what is on the stage.">HTML</button>
+        <button class="tab" data-pane="css" role="tab" data-tip="Styles and keyframe animations. Most of the motion lives here.">CSS</button>
+        <button class="tab" data-pane="js" role="tab" data-tip="Script against the virtual clock: stage.time, stage.at(), stage.stagger().">JS</button>
+        <div class="spacer"></div>
+        <button id="btnSnippets" class="btn ghost small" data-tip="Replace this clip with a built-in starter animation.\nThe current HTML, CSS and JS are overwritten.">Snippets</button>
+        <button id="btnCollapse" class="btn ghost small" data-tip="Collapse the code panel to give the stage more room." data-tip-key="⌘\">▾</button>
+      </div>
+      <div class="editor-wrap">
+        <textarea id="ed-html" class="editor" spellcheck="false" data-pane="html"></textarea>
+        <textarea id="ed-css"  class="editor" spellcheck="false" data-pane="css"></textarea>
+        <textarea id="ed-js"   class="editor" spellcheck="false" data-pane="js"></textarea>
+      </div>
+      <div class="console" id="console" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────── inspector ─────────────────────────── -->
+  <aside class="inspector">
+
+    <!-- ······························ clip mode ······························ -->
+    <div class="insp-group" data-mode="clip">
+      <h3>Clip</h3>
+      <div class="settings">
+        <label class="wide">Name<input id="setName" type="text" spellcheck="false" data-tip="The clip name — used for the exported file and in the timeline."></label>
+        <label data-tip="How long the clip runs, in seconds.">Duration<span class="unit"><input id="setDuration" type="number" min="0.1" step="0.1"> s</span></label>
+        <label data-tip="Frames per second. 30 is standard; 60 doubles both the smoothness and the render time.">FPS<input id="setFps" type="number" min="1" max="120" step="1"></label>
+        <label data-tip="Frame width in pixels.\nMP4 needs even numbers — odd sizes are rounded down when encoding.">Width<input id="setWidth" type="number" min="16" max="7680" step="2"></label>
+        <label data-tip="Frame height in pixels.\nMP4 needs even numbers — odd sizes are rounded down when encoding.">Height<input id="setHeight" type="number" min="16" max="7680" step="2"></label>
+        <label class="wide" data-tip="Common frame sizes. Choosing one fills in width and height.">Preset
+          <select id="setPreset">
+            <option value="">custom…</option>
+            <option value="1920x1080">1920×1080 · 16:9</option>
+            <option value="1080x1920">1080×1920 · 9:16</option>
+            <option value="1080x1080">1080×1080 · 1:1</option>
+            <option value="1280x720">1280×720 · 720p</option>
+            <option value="3840x2160">3840×2160 · 4K</option>
+            <option value="1920x270">1920×270 · lower third</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="insp-group" data-mode="clip">
+      <h3>Background</h3>
+      <div class="bg-row">
+        <div class="seg" role="radiogroup" aria-label="Background">
+          <button class="seg-btn" data-bg="transparent" role="radio" data-tip="Transparent background.\nExport as MOV or WebM to keep real per-pixel transparency — MP4 cannot store an alpha channel.\nThis is what an overlay on a timeline wants.">Alpha</button>
+          <button class="seg-btn" data-bg="green" role="radio" data-tip="Solid #00b140 broadcast chroma green.\nUse it with MP4 when you plan to key the background out in your editor.">Green</button>
+          <button class="seg-btn" data-bg="color" role="radio" data-tip="A solid colour, baked into every frame.">Colour</button>
+        </div>
+        <input id="bgColor" type="color" value="#00b140" aria-label="Background colour" data-tip="Pick the background colour.">
+      </div>
+    </div>
+
+    <div class="insp-group" data-mode="clip">
+      <h3>Export clip</h3>
+      <div class="export">
+        <label class="wide" data-tip="MOV (ProRes 4444) and WebM (VP9) carry true alpha.\nMP4 is universal but always opaque.">Format<select id="expFormat"></select></label>
+        <label class="wide" id="qualityLabel" data-tip="Constant Rate Factor — lower means better quality and a larger file.\n18 is visually lossless for MP4; 24 suits WebM. ProRes is fixed-rate, so this does nothing for MOV.">Quality
+          <span class="unit"><input id="expQuality" type="range" min="0" max="40" value="18"><b id="expQualityVal">18</b></span>
+        </label>
+        <p id="formatNote" class="note"></p>
+        <div class="export-row buttons">
+          <button id="btnStudio" class="btn primary grow" data-tip="Renders frame by frame with the clock stepped forward, so a slow frame still lands on its exact timestamp.\nThe only path that can emit ProRes 4444 or H.264." data-tip-key="⌘E">Studio export</button>
+          <button id="btnQuick" class="btn grow" data-tip="Records the preview in real time, WebM only.\nFast, but it drops frames if one takes longer than 1/fps to draw.">Quick</button>
+        </div>
+        <button id="btnExportAll" class="btn wide ghost" data-tip="Render every clip in this project one after another, using the format and quality above.">Export all clips</button>
+        <button id="btnToSequence" class="btn wide ghost" data-tip="Place this clip on the timeline as an overlay layer, at the playhead.">Add to timeline →</button>
+        <div id="progressWrap" class="progress-wrap hidden">
+          <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+          <div class="progress-row">
+            <span id="progressText" class="progress-text"></span>
+            <button id="btnCancel" class="btn ghost small" data-tip="Stop this export. Nothing half-written is kept.">Cancel</button>
+          </div>
+        </div>
+        <p id="exportResult" class="result"></p>
+      </div>
+    </div>
+
+    <!-- ··························· timeline mode ····························· -->
+    <div class="insp-group" data-mode="seq">
+      <h3>Timeline</h3>
+      <div class="insp-sub" id="rowTimelineOps" style="display:flex;gap:6px;margin-bottom:8px">
+        <button id="btnDupTimeline" class="btn grow" data-tip="Copy this timeline as a new version and open it. Tracks and items are copied; sections stay shared (⌥-click copies them too).">Duplicate ⧉</button>
+        <button id="btnDelTimeline" class="btn grow ghost" data-tip="Delete this timeline. Refused while it is the main timeline or placed as a section. Click twice.">Delete</button>
+      </div>
+      <div class="settings">
+        <label class="wide">Name<input id="seqName" type="text" spellcheck="false" data-tip="The timeline name — used for the rendered file and in the Timelines rail."></label>
+        <label data-tip="Frames per second for the finished video.">FPS<input id="seqFps" type="number" min="1" max="120" step="1"></label>
+        <label data-tip="Total length. A timeline is exactly as long as its last item.">Length<span class="unit"><b id="seqLength">0.0</b> s</span></label>
+        <label data-tip="Output frame width.">Width<input id="seqWidth" type="number" min="16" max="7680" step="2"></label>
+        <label data-tip="Output frame height.">Height<input id="seqHeight" type="number" min="16" max="7680" step="2"></label>
+        <label class="wide" data-tip="Common frame sizes. Choosing one fills in width and height.">Preset
+          <select id="seqPreset">
+            <option value="">custom…</option>
+            <option value="1920x1080">1920×1080 · 16:9</option>
+            <option value="1080x1920">1080×1920 · 9:16</option>
+            <option value="1080x1080">1080×1080 · 1:1</option>
+            <option value="1280x720">1280×720 · 720p</option>
+            <option value="3840x2160">3840×2160 · 4K</option>
+          </select>
+        </label>
+        <label class="wide" data-tip="What shows through where nothing is laid.\nTransparent only survives in MOV or WebM.">Background
+          <span class="unit">
+            <select id="seqBgMode" data-tip="A solid colour, or nothing at all where no item is laid.">
+              <option value="color">colour</option>
+              <option value="transparent">transparent</option>
+            </select>
+            <input id="seqBgColor" type="color" value="#000000" data-tip="The background colour.">
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <div class="insp-group hidden" data-mode="seq" id="multiInspector">
+      <h3>Selection</h3>
+      <p class="note" id="multiCount"></p>
+      <div class="export-row buttons">
+        <button id="btnMultiExport" class="btn primary grow" data-tip="Export the selected items as separate files.">Export parts…</button>
+        <button id="btnMultiCaptions" class="btn grow" data-tip="One subtitle file from every selected caption item, timed as they fall on the timeline.">Export captions…</button>
+        <button id="btnMultiDetach" class="btn grow" data-tip="Detach the sound of every selected item with picture and sound.">Detach audio</button>
+      </div>
+      <div class="export-row buttons">
+        <button id="btnMultiGroup" class="btn grow" data-tip="Move the selected items into a new sub-timeline and leave one block in their place. Open the block to edit them on their own.">Group into sub-timeline</button>
+        <button id="btnMultiDelete" class="btn grow" data-tip="Remove every selected item, leaving gaps." data-tip-key="⌫">Delete</button>
+        <button id="btnMultiRipple" class="btn grow" data-tip="Remove every selected item and close the gaps." data-tip-key="⇧⌫">Ripple</button>
+      </div>
+      <p class="rail-hint">⌘-click adds one · ⇧-click selects the run between two clicks on a track · ⌘A selects all · drag moves the group together</p>
+    </div>
+
+    <div class="insp-group hidden" data-mode="seq" id="trackInspector">
+      <h3>Track</h3>
+      <div class="settings">
+        <label class="wide">Name<input id="trackName" type="text" spellcheck="false" data-tip="The track name. Agents refer to tracks by name too."></label>
+        <div class="wide">
+          <div class="side-label" data-tip="A colour for this track's header and items. Purely visual.">Colour</div>
+          <div class="swatches" id="trackSwatches"></div>
+        </div>
+        <label class="wide" data-tip="Free text about this track — what belongs here, what to keep off it.\nAn agent reads it in get_timeline, so it is a good place to leave instructions.">Note
+          <textarea id="trackNote" class="note" spellcheck="false" placeholder="e.g. Lower thirds only, brand blue, never over the presenter's face"></textarea>
+        </label>
+        <label class="check"><input id="trackLocked" type="checkbox" data-tip="Locked tracks are left alone by ripple edits and silence removal."> locked</label>
+        <label class="check"><input id="trackMuted" type="checkbox" data-tip="Silence every item on this track."> muted</label>
+        <label class="check" id="rowTrackHidden"><input id="trackHidden" type="checkbox" data-tip="Leave this track out of the preview and the render."> hidden</label>
+        <div class="wide">
+          <div class="side-label" data-tip="Stacking order. The top track draws over everything beneath it, in the preview and in the render. Video tracks stay above audio tracks.\nYou can also drag a track header up or down on the timeline.">Order</div>
+          <div class="export-row buttons">
+            <button id="btnTrackTop" class="btn small ghost" data-tip="Make this the top track of its kind." data-tip-key="⌥⇧↑">⤒ Top</button>
+            <button id="btnTrackUp" class="btn small grow" data-tip="Move this track one step up." data-tip-key="⌥↑">▲ Up</button>
+            <button id="btnTrackDown" class="btn small grow" data-tip="Move this track one step down." data-tip-key="⌥↓">▼ Down</button>
+            <button id="btnTrackBottom" class="btn small ghost" data-tip="Make this the bottom track of its kind." data-tip-key="⌥⇧↓">⤓ Bottom</button>
+          </div>
+          <p class="note" id="trackOrder"></p>
+          <button id="btnTrackDelete" class="btn wide ghost danger-btn" data-tip="Remove this empty track. Click twice.">Delete track</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="insp-group" data-mode="seq" id="itemInspector">
+      <h3>Selected item</h3>
+      <p class="note" id="itemEmpty">Nothing selected. Click an item on the timeline.</p>
+
+      <div class="settings hidden" id="itemSettings">
+        <label class="wide">Name<input id="itemName" type="text" spellcheck="false" data-tip="A name for this item, shown on its block."></label>
+        <label data-tip="Where the item starts on the timeline.">Start<span class="unit"><input id="itemStart" type="number" min="0" step="0.1"> s</span></label>
+        <label data-tip="How long it plays for.">Length<span class="unit"><input id="itemDur" type="number" min="0.04" step="0.1"> s</span></label>
+        <label data-tip="Where playback starts inside the source file.">In-point<span class="unit"><input id="itemIn" type="number" min="0" step="0.1"> s</span></label>
+        <label data-tip="Layer transparency, multiplied over whatever the layer already has.">Opacity<span class="unit"><input id="itemOpacity" type="range" min="0" max="1" step="0.01"><b id="itemOpacityVal">1</b></span></label>
+
+        <label class="wide" id="rowFit" data-tip="How footage or an image that does not match its box is handled.\nContain letterboxes it; cover crops it; fill stretches it; none keeps the original pixels.">Fit
+          <select id="itemFit">
+            <option value="contain">contain — letterbox</option>
+            <option value="cover">cover — crop to fill</option>
+            <option value="fill">fill — stretch</option>
+            <option value="none">none — original size</option>
+          </select>
+        </label>
+        <label class="wide" id="rowAnchor" data-tip="Where an overlay sits in the frame. The render uses this same arithmetic.">Anchor
+          <select id="itemAnchor">
+            <option value="center">centre</option>
+            <option value="top">top</option>
+            <option value="bottom">bottom</option>
+            <option value="left">left</option>
+            <option value="right">right</option>
+            <option value="top-left">top left</option>
+            <option value="top-right">top right</option>
+            <option value="bottom-left">bottom left</option>
+            <option value="bottom-right">bottom right</option>
+          </select>
+        </label>
+        <label id="rowOffX" data-tip="Nudge horizontally from the anchor, in pixels.\nOr drag the item around the preview.">Offset X<input id="itemOffX" type="number" step="1"></label>
+        <label id="rowOffY" data-tip="Nudge vertically from the anchor, in pixels.\nOr drag the item around the preview.">Offset Y<input id="itemOffY" type="number" step="1"></label>
+        <p class="note wide" id="placeHint">Drag it around the preview to move it; drag a handle to resize. ⇧ straightens a drag and frees a corner's proportions · ⌥ resizes from the middle · ⌘ ignores the guides · ⌥ arrows nudge by a pixel, ⌥⇧ by ten.</p>
+        <label class="wide" id="rowScale" data-tip="How big the layer is drawn, against its own natural size.\nFootage and nested blocks are resampled; an animation clip is re-rendered at that size, so it stays sharp at any percentage.\nOr drag a corner handle in the preview.">Scale
+          <span class="unit"><input id="itemScale" type="range" min="5" max="400" step="1"><b id="itemScaleVal">100%</b></span>
+        </label>
+
+        <div class="insp-sub" id="rowTransform">
+          <div class="side-label" data-tip="Turning, mirroring and cropping. All of it renders exactly as the preview shows it.">Transform</div>
+          <label data-tip="Degrees clockwise, about the middle of the layer.\nOr drag the round handle above the selection in the preview; ⇧ snaps to 15°.">Rotate<span class="unit"><input id="itemRotate" type="number" step="1" min="-180" max="180"> °</span></label>
+          <div class="export-row buttons">
+            <button id="btnFlipH" class="btn small grow toggle" data-tip="Mirror the layer left to right.">⇋ Flip H</button>
+            <button id="btnFlipV" class="btn small grow toggle" data-tip="Mirror the layer top to bottom.">⇅ Flip V</button>
+            <button id="btnUnturn" class="btn small ghost" data-tip="Back to 0°, unmirrored.">Reset</button>
+          </div>
+          <div class="wide hidden" id="rowCrop">
+            <div class="side-label" data-tip="Cut the edges off the source before it is fitted into the frame. Percentages of the source, so a crop survives swapping the shot for a different resolution.">Crop</div>
+            <div class="grid4">
+              <label class="tiny" data-tip="Cut off the top.">T<input id="cropT" type="number" min="0" max="95" step="1"></label>
+              <label class="tiny" data-tip="Cut off the right.">R<input id="cropR" type="number" min="0" max="95" step="1"></label>
+              <label class="tiny" data-tip="Cut off the bottom.">B<input id="cropB" type="number" min="0" max="95" step="1"></label>
+              <label class="tiny" data-tip="Cut off the left.">L<input id="cropL" type="number" min="0" max="95" step="1"></label>
+            </div>
+            <div class="export-row buttons">
+              <button id="btnCropMode" class="btn small grow toggle" data-tip="Drag the handles in the preview to cut the edges instead of resizing.\nClick again, or press Esc, to go back to resizing." data-tip-key="C">✂ Crop on the stage</button>
+              <button id="btnCropReset" class="btn small ghost" data-tip="Show the whole source again.">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="insp-sub" id="rowArrange">
+          <div class="side-label" data-tip="Line the layer up with the frame — or, when several are selected, with each other.">Arrange</div>
+          <div class="export-row buttons">
+            <button class="btn small grow align-btn" data-align="left" data-tip="Align the left edges.">⇤</button>
+            <button class="btn small grow align-btn" data-align="cx" data-tip="Centre horizontally.">⇹</button>
+            <button class="btn small grow align-btn" data-align="right" data-tip="Align the right edges.">⇥</button>
+            <button class="btn small grow align-btn" data-align="top" data-tip="Align the top edges.">⇡</button>
+            <button class="btn small grow align-btn" data-align="cy" data-tip="Centre vertically.">⇕</button>
+            <button class="btn small grow align-btn" data-align="bottom" data-tip="Align the bottom edges.">⇣</button>
+          </div>
+          <div class="export-row buttons">
+            <button class="btn small grow align-btn" data-align="dx" data-tip="Spread three or more selected layers evenly across, keeping the outermost two where they are.">Distribute ⇹</button>
+            <button class="btn small grow align-btn" data-align="dy" data-tip="Spread three or more selected layers evenly down.">Distribute ⇕</button>
+          </div>
+          <div class="export-row buttons">
+            <button id="btnItemFront" class="btn small grow" data-tip="Put the layer on the topmost video track, above everything." data-tip-key="⌘⇧]">⤒ Front</button>
+            <button id="btnItemUpOne" class="btn small grow" data-tip="One track up." data-tip-key="⌘]">▲</button>
+            <button id="btnItemDownOne" class="btn small grow" data-tip="One track down." data-tip-key="⌘[">▼</button>
+            <button id="btnItemBack" class="btn small grow" data-tip="Put the layer on the bottom video track." data-tip-key="⌘⇧[">⤓ Back</button>
+          </div>
+        </div>
+
+        <div class="insp-sub" id="rowKeys">
+          <div class="side-label" data-tip="Make a value different at two moments and the editor draws the line between. Where it sits, how big it is, how solid — a still that drifts, a logo that pops, a card that fades.\nTurning is not keyframable: a box that changed size every frame would make the placement arithmetic time-varying everywhere.">Keyframes</div>
+          <p class="note wide" id="keysHint">Put the playhead where you want a value, set it, then press ◆.</p>
+          <div id="keyRows"></div>
+          <div class="export-row buttons">
+            <button id="btnKeyPrev" class="btn small grow" data-tip="Jump to the previous keyed moment on this item.">◂ Key</button>
+            <button id="btnKeyNext" class="btn small grow" data-tip="Jump to the next keyed moment.">Key ▸</button>
+            <button id="btnKeysClear" class="btn small ghost" data-tip="Remove every keyframe from this item; it goes back to standing still.">Clear</button>
+          </div>
+        </div>
+
+        <div class="insp-sub" id="rowSpeed">
+          <div class="side-label" data-tip="How fast the source runs against the timeline. Footage, nested blocks and animation clips only — a caption's times come from its transcript and a title's from its own length.">Speed</div>
+          <label data-tip="1 is normal. 2 plays twice as fast in half the length; 0.5 is slow motion.\nSound is re-timed with its pitch kept where it was.">Rate<span class="unit"><input id="itemSpeed" type="number" min="0.1" max="8" step="0.05"> ×</span></label>
+          <div class="export-row buttons">
+            <button class="btn small grow speed-btn" data-speed="0.5" data-tip="Half speed.">0.5×</button>
+            <button class="btn small grow speed-btn" data-speed="1" data-tip="Back to normal.">1×</button>
+            <button class="btn small grow speed-btn" data-speed="1.5" data-tip="Half again.">1.5×</button>
+            <button class="btn small grow speed-btn" data-speed="2" data-tip="Double speed.">2×</button>
+          </div>
+          <label class="check wide" data-tip="Keep the item covering the same stretch of source, so changing the rate stretches or shrinks it on the timeline instead of showing more or less of the shot."><input id="speedRipple" type="checkbox" checked> change its length to match</label>
+        </div>
+
+        <div class="insp-sub" id="rowDissolve">
+          <div class="side-label" data-tip="Fade the picture up at the start and down at the end. Two of these on neighbouring layers are a cross dissolve — which is exactly what the button below sets up.">Dissolve</div>
+          <label data-tip="Fade the picture up over this many seconds.">In<span class="unit"><input id="dissolveIn" type="number" min="0" step="0.1"> s</span></label>
+          <label data-tip="Fade the picture down over this many seconds.">Out<span class="unit"><input id="dissolveOut" type="number" min="0" step="0.1"> s</span></label>
+          <button id="btnCrossDissolve" class="btn wide" data-tip="Overlap this item with the one after it on its track and fade between them.\nThe next item moves to the track above, because one track holds one item at a time — that is what makes the overlap possible at all.">⇥ Cross dissolve into the next item</button>
+        </div>
+
+        <div class="insp-sub" id="rowLook">
+          <div class="side-label" data-tip="Colour, blending and edges. Footage and nested blocks go through ffmpeg; a title, shape or image is re-rendered, so what you see is what is written.">Look</div>
+          <label data-tip="Overall exposure. 100% leaves it alone.">Brightness<span class="unit"><input id="ccBright" type="range" min="20" max="250" step="1"><b id="ccBrightVal">100%</b></span></label>
+          <label data-tip="Push the tones apart from the middle grey, or pull them together.">Contrast<span class="unit"><input id="ccContrast" type="range" min="0" max="250" step="1"><b id="ccContrastVal">100%</b></span></label>
+          <label data-tip="0% is black and white; above 100% is louder colour.">Saturation<span class="unit"><input id="ccSat" type="range" min="0" max="250" step="1"><b id="ccSatVal">100%</b></span></label>
+          <label data-tip="Warm lifts the reds, cool the blues.">Temperature<span class="unit"><input id="ccTemp" type="range" min="-100" max="100" step="1"><b id="ccTempVal">0</b></span></label>
+          <label class="wide" data-tip="How the layer is mixed with what is under it. Multiply darkens, screen lightens, overlay does both.">Blend
+            <select id="itemBlend">
+              <option value="normal">normal</option>
+              <option value="multiply">multiply</option>
+              <option value="screen">screen</option>
+              <option value="overlay">overlay</option>
+              <option value="darken">darken</option>
+              <option value="lighten">lighten</option>
+              <option value="softlight">soft light</option>
+              <option value="hardlight">hard light</option>
+              <option value="difference">difference</option>
+              <option value="exclusion">exclusion</option>
+            </select>
+          </label>
+          <label data-tip="Round the layer's corners, in frame pixels.">Corners<span class="unit"><input id="itemRadius" type="number" min="0" max="600" step="1"> px</span></label>
+          <div class="side-label" data-tip="A soft shadow under the layer — what makes a picture-in-picture read as a card over the footage rather than a hole in it.">Shadow</div>
+          <label data-tip="How soft. 0 turns the shadow off.">Blur<span class="unit"><input id="shBlur" type="number" min="0" max="400" step="1"> px</span></label>
+          <label data-tip="How strong.">Opacity<span class="unit"><input id="shOpacity" type="range" min="0" max="100" step="1"><b id="shOpacityVal">45%</b></span></label>
+          <label data-tip="Sideways offset.">Shadow X<input id="shX" type="number" min="-400" max="400" step="1"></label>
+          <label data-tip="Downward offset.">Shadow Y<input id="shY" type="number" min="-400" max="400" step="1"></label>
+          <label class="wide" data-tip="The shadow's colour.">Shadow colour<input id="shColor" type="color"></label>
+          <button id="btnLookReset" class="btn wide ghost" data-tip="Put colour, blend, corners and shadow back to nothing.">Reset the look</button>
+        </div>
+
+        <div class="insp-sub hidden" id="rowImage">
+          <div class="side-label" data-tip="A still from Assets. Fit above decides how it fills its box; leave the size blank for its natural size (shrunk to fit the frame).">Image</div>
+          <p class="note wide" id="imgSource"></p>
+          <label data-tip="Box width in pixels at timeline size. Blank = natural.">Width<input id="imgW" type="number" min="4" max="8192" step="2"></label>
+          <label data-tip="Box height in pixels at timeline size. Blank = natural.">Height<input id="imgH" type="number" min="4" max="8192" step="2"></label>
+          <label data-tip="Corner rounding in pixels.">Corners<input id="imgRadius" type="number" min="0" max="1000" step="1"></label>
+          <label class="check" data-tip="A soft drop shadow, so a screenshot reads as a card over the footage."><input id="imgShadow" type="checkbox"> shadow</label>
+          <button id="btnImageToClip" class="btn wide ghost" data-tip="Turn this image into a normal animation clip you can animate with your own CSS.\nThe item keeps its place on the timeline.">Convert to animation clip</button>
+        </div>
+
+        <div class="insp-sub" id="rowAudio">
+          <label data-tip="Playback level for this item.">Volume<span class="unit"><input id="itemVolume" type="range" min="0" max="2" step="0.01"><b id="itemVolumeVal">100%</b></span></label>
+          <label class="check" data-tip="Silence this item without removing it."><input id="itemMuted" type="checkbox"> mute</label>
+          <label data-tip="Fade the sound up over this many seconds.">Fade in<span class="unit"><input id="itemFadeIn" type="number" min="0" step="0.1"> s</span></label>
+          <label data-tip="Fade the sound down over this many seconds.">Fade out<span class="unit"><input id="itemFadeOut" type="number" min="0" step="0.1"> s</span></label>
+          <label class="wide hidden" id="rowReplace" data-tip="Lay a different sound under this item — a new voice, say — on its own audio track, aligned to the item's start. The item's own sound is muted.">Replace sound with
+            <select id="itemReplaceAudio"></select>
+          </label>
+          <div class="export-row buttons wide">
+            <button id="btnDetach" class="btn grow" data-tip="Move this item's sound onto its own audio track and mute the picture.\nThen trim, replace or silence either one without the other.">Detach audio</button>
+          </div>
+
+          <div class="side-label" data-tip="Find the silent stretches in this item's sound, from its waveform.\nThey show as red bands on the timeline while you tune these.">Silence</div>
+          <label class="wide" data-tip="Anything quieter than this counts as silence.\n−40 dB suits a normal recording; raise it towards −25 for a noisy room, lower it for a quiet studio.">Threshold
+            <span class="unit"><input id="silDb" type="range" min="-60" max="-12" step="1"><b id="silDbVal">−40 dB</b></span>
+          </label>
+          <label data-tip="Ignore gaps shorter than this. Half a second skips the pauses between words and keeps the ones between sentences.">Min gap<span class="unit"><input id="silMin" type="number" min="0.1" max="10" step="0.1"> s</span></label>
+          <label data-tip="How much of each gap to keep on either side, so a cut lands a breath after the last word rather than on it.">Keep<span class="unit"><input id="silKeep" type="number" min="0" max="1000" step="10"> ms</span></label>
+          <p class="note wide" id="silSummary">—</p>
+          <div class="export-row buttons wide">
+            <button id="btnCutGaps" class="btn grow" data-tip="Split at the edges of every gap, removing nothing — so you can decide gap by gap.">Cut at gaps</button>
+            <button id="btnRemoveGaps" class="btn primary grow" data-tip="Remove every gap and close up the timeline.\nRipples through every unlocked track, so captions and overlays stay in sync; lock a music bed first.\n⌘Z undoes it.">Remove gaps</button>
+          </div>
+        </div>
+
+        <div class="insp-sub hidden" id="rowText">
+          <div class="side-label text-only">Text</div>
+          <label class="wide text-only" data-tip="What the title says. The timeline redraws as you type.">Text
+            <textarea id="textText" class="note" spellcheck="true" placeholder="Type the title…"></textarea>
+          </label>
+          <label class="wide text-only" id="rowTextSub" data-tip="The second line: a role under a name, an attribution under a quote.">Second line<input id="textSub" type="text" spellcheck="true"></label>
+          <label class="wide" data-tip="How the text is animated, or which shape this is. Switching keeps the words and style.">Preset<select id="textPreset"></select></label>
+          <div class="insp-sub hidden" id="rowShape">
+            <div class="side-label" data-tip="Size in timeline pixels. Place it with Anchor and the offsets above; Colour is the fill, Accent the outline.">Shape</div>
+            <label data-tip="Width in pixels at timeline size.">Width<input id="shapeW" type="number" min="4" max="4096" step="2"></label>
+            <label data-tip="Height in pixels at timeline size.">Height<input id="shapeH" type="number" min="4" max="4096" step="2"></label>
+            <label data-tip="Corner rounding in pixels. Half the height makes a pill.">Corners<input id="shapeRadius" type="number" min="0" max="1000" step="1"></label>
+            <label data-tip="Outline thickness in pixels, drawn in the accent colour. 0 = none.">Outline<input id="shapeStroke" type="number" min="0" max="200" step="1"></label>
+            <label class="wide hidden" id="rowShapeDir" data-tip="Which way the arrow points.">Points<select id="shapeDir"><option value="right">right</option><option value="left">left</option><option value="up">up</option><option value="down">down</option></select></label>
+          </div>
+          <label class="wide text-only" data-tip="Any font family. Fonts in the asset library are listed; system fonts work too.">Font<input id="textFont" type="text" list="fontList" spellcheck="false"><datalist id="fontList"></datalist></label>
+          <label class="text-only" data-tip="Cap height in pixels at timeline resolution.">Size<input id="textSize" type="number" min="8" max="600" step="2"></label>
+          <label class="text-only" data-tip="Font weight.">Weight
+            <select id="textWeight"><option value="400">400</option><option value="500">500</option><option value="600">600</option><option value="700">700</option><option value="800">800</option><option value="900">900</option></select>
+          </label>
+          <label data-tip="Text colour — the fill of a shape.">Colour<input id="textColor" type="color"></label>
+          <label data-tip="The second colour a preset uses: bars, rules, strokes, carets — the outline of a shape.">Accent<input id="textAccent" type="color"></label>
+          <label class="wide text-only" data-tip="Horizontal alignment where the preset allows it.">Align
+            <select id="textAlign"><option value="left">left</option><option value="center">centre</option><option value="right">right</option></select>
+          </label>
+          <label class="check text-only" data-tip="Draw the text in capitals."><input id="textUpper" type="checkbox"> uppercase</label>
+          <button id="btnTextToClip" class="btn wide ghost" data-tip="Turn this title into a normal animation clip you can edit as HTML and CSS.\nThe item keeps its place on the timeline.">Convert to animation clip</button>
+        </div>
+
+        <div class="insp-sub hidden" id="rowCaption">
+          <div class="side-label">Captions</div>
+          <label data-tip="Cap height of the caption text, in pixels at timeline resolution.">Size<input id="capSize" type="number" min="8" max="300" step="2"></label>
+          <label data-tip="Distance from the edge of the frame.">Margin<input id="capMargin" type="number" min="0" max="2000" step="4"></label>
+          <label data-tip="Text colour.">Colour<input id="capColor" type="color"></label>
+          <label class="wide" data-tip="Where captions sit in the frame.">Position
+            <select id="capPos"><option value="bottom">bottom</option><option value="center">centre</option><option value="top">top</option></select>
+          </label>
+          <label class="wide" data-tip="How each line arrives and leaves.\nCut is instant; fade and pop ramp over 120 ms and never overlap the next line.">Transition
+            <select id="capTransition"><option value="cut">cut</option><option value="fade">fade</option><option value="pop">pop</option></select>
+          </label>
+          <label class="wide" data-tip="Highlight the words as they are spoken. Needs word-level timings (Whisper JSON).\nWord lights only the current word; fill keeps every word said so far lit.">Karaoke
+            <select id="capKaraoke"><option value="off">off</option><option value="word">word</option><option value="fill">fill</option></select>
+          </label>
+          <label data-tip="Highlight colour for karaoke words.">Accent<input id="capAccent" type="color"></label>
+          <label class="check" data-tip="Draw the text in capitals."><input id="capUpper" type="checkbox"> uppercase</label>
+          <label class="check" data-tip="Drop a soft shadow behind the text so it survives a bright frame."><input id="capShadow" type="checkbox"> shadow</label>
+          <div class="side-label wide" data-tip="The lines inside this item, editable: start and end in source seconds, then the words. A changed line loses its word timings.">Cues</div>
+          <div id="cueList" class="cue-list wide"></div>
+          <div class="export-row buttons wide">
+            <button id="btnCueAdd" class="btn grow" data-tip="Add a line at the playhead.">+ line</button>
+            <button id="btnCueUndo" class="btn grow" data-tip="Undo the last change to this transcript. Transcript edits are outside ⌘Z.">Undo cue edit</button>
+          </div>
+          <div class="export-row buttons wide">
+            <button id="btnCueEditAll" class="btn grow" data-tip="Open the transcript editor on this item's lines, with times as they fall on the timeline — and a switch to the whole transcript. Search, find-and-replace, split, merge and shift, while the timeline keeps playing.">Edit captions…</button>
+            <button id="btnCueExport" class="btn grow" data-tip="Save these captions as SRT, VTT or plain text, timed as they fall on the timeline.">Export captions…</button>
+          </div>
+          <button id="btnCaptionToClip" class="btn wide ghost" data-tip="Turn these captions into a normal animation clip you can style with your own CSS.\nThe item keeps its place on the timeline.">Convert to animation clip</button>
+        </div>
+
+        <label class="wide" data-tip="Free text about this item. An agent reads it in get_timeline.">Note
+          <textarea id="itemNote" class="note" spellcheck="false" placeholder="e.g. Keep this take — best delivery of the intro"></textarea>
+        </label>
+        <button id="btnEditClip" class="btn wide ghost hidden" data-tip="Open this animation in Clip mode to edit its code.">Edit this clip →</button>
+        <div class="insp-sub hidden" id="rowNested" style="display:flex;gap:6px">
+          <button id="btnOpenNested" class="btn grow" data-tip="Open the timeline this block plays. Edits there show up here.">Open timeline →</button>
+          <button id="btnFlatten" class="btn grow ghost" data-tip="Replace this block with the items inside it, on matching tracks. The timeline itself stays in the project.">Flatten</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="insp-group" data-mode="seq">
+      <h3>Render timeline</h3>
+      <div class="export">
+        <label class="wide" data-tip="MP4 is the deliverable. MOV and WebM keep alpha, and carry sound too.">Format<select id="seqFormat"></select></label>
+        <label class="wide" data-tip="Constant Rate Factor — lower is better and larger. 20 is a good default for MP4.">Quality
+          <span class="unit"><input id="seqQuality" type="range" min="0" max="40" value="20"><b id="seqQualityVal">20</b></span>
+        </label>
+        <label class="wide" data-tip="How animation layers are rendered before ffmpeg composites them.\nWebM is small and near-lossless for graphics. ProRes is the mastering choice, and very large.">Overlays
+          <select id="seqOverlayFormat"></select>
+        </label>
+        <p id="seqFormatNote" class="note"></p>
+        <p id="seqPlanNote" class="note plan"></p>
+        <button id="btnRenderSeq" class="btn primary wide" data-tip="Render every animation layer to alpha, then composite and mix with ffmpeg." data-tip-key="⌘⇧E">Render timeline</button>
+        <div id="seqProgressWrap" class="progress-wrap hidden">
+          <div class="progress"><div id="seqProgressBar" class="progress-bar"></div></div>
+          <div class="progress-row">
+            <span id="seqProgressText" class="progress-text"></span>
+            <button id="btnSeqCancel" class="btn ghost small" data-tip="Stop the render. The partial file is deleted.">Cancel</button>
+          </div>
+        </div>
+        <p id="seqResult" class="result"></p>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<button class="edge-tab left" id="edgeRail" data-tip="Show the rail." data-tip-key="[" data-tip-at="right" aria-label="Show rail">▸</button>
+<button class="edge-tab right" id="edgeInsp" data-tip="Show the inspector." data-tip-key="]" aria-label="Show inspector">◂</button>
+<div class="drawer-backdrop" id="drawerBackdrop"></div>
+
+<div id="dropZone" class="drop-zone"><div class="drop-inner">Drop video, audio, transcripts, images or fonts — each goes where it belongs</div></div>
+
+<!-- ────────────────────────────────── dialogs ─────────────────────────────── -->
+<dialog id="dlgProjects" class="dlg projects-dlg">
+  <h3>Projects</h3>
+  <p class="dlg-hint">Click a project to open it. Rename, duplicate or delete with the row buttons.</p>
+  <div class="new-project">
+    <input id="newProjectName" type="text" spellcheck="false" placeholder="Name a new project…" data-tip="Name the new project, then press Enter or Create.">
+    <button id="btnNewProject" class="btn primary" data-tip="Create a project with that name and open it.">Create</button>
+  </div>
+  <ul id="projectList" class="project-list"></ul>
+
+  <div class="local-panel hidden" id="localPanel">
+    <div class="side-label" data-tip="This build has no server. Everything you make is held by this browser and never leaves it.">Stored in this browser</div>
+    <p class="note" id="localUse">—</p>
+    <div class="export-row buttons">
+      <button id="btnImportProject" class="btn small grow" data-tip="Open a .klipvia.zip — a project with its footage and images inside it.">Import a project file…</button>
+      <button id="btnEraseLocal" class="btn small ghost danger-btn" data-tip="Delete every project, all footage and all images held by this browser. There is no undo. Click twice.">Erase everything</button>
+    </div>
+    <input id="importProjectFile" type="file" accept=".zip,.klipvia,application/zip" hidden>
+  </div>
+
+  <div class="dlg-foot">
+    <button class="btn ghost" id="btnProjClose" data-tip="Close this dialog.">Close</button>
+  </div>
+</dialog>
+
+<dialog id="dlgAsset" class="dlg asset-dlg">
+  <div class="asset-view">
+    <div class="asset-stage" id="assetStage" data-abg="checker">
+      <img id="assetImg" alt="" hidden>
+      <div id="assetSprite" class="sprite-preview" hidden></div>
+      <div id="assetSpecimen" class="specimen" hidden></div>
+    </div>
+    <div class="asset-side">
+      <h3 id="assetName">asset</h3>
+      <dl class="asset-meta" id="assetMeta"></dl>
+
+      <div class="side-label">Preview against</div>
+      <div class="seg">
+        <button class="seg-btn active" data-abg="checker" data-tip="Preview over a checkerboard, so transparency shows.">Checker</button>
+        <button class="seg-btn" data-abg="dark" data-tip="Preview over dark.">Dark</button>
+        <button class="seg-btn" data-abg="light" data-tip="Preview over light.">Light</button>
+      </div>
+
+      <div class="side-label" id="zoomLabel">Zoom</div>
+      <div class="seg" id="assetZoom">
+        <button class="seg-btn active" data-azoom="fit" data-tip="Shrink to fit the viewer.">Fit</button>
+        <button class="seg-btn" data-azoom="1" data-tip="True pixels.">100%</button>
+      </div>
+
+      <div class="side-label">Use it</div>
+      <div class="asset-actions">
+        <button id="btnInsSprite" class="btn primary wide hidden" data-tip="Adds a div to the HTML and a steps() animation to the CSS that plays this sheet as footage inside the clip.">Insert as animated sprite</button>
+        <button id="btnInsHtml" class="btn primary wide" data-tip="Add the asset to the HTML pane: an <img>, or a @font-face plus a font-family rule for a font.">Insert into HTML</button>
+        <button id="btnInsCss" class="btn wide" data-tip="Add the asset to the CSS pane as a background-image or @font-face.">Insert into CSS</button>
+        <button id="btnCopyUrl" class="btn ghost wide" data-tip="Copy the asset URL to the clipboard, to paste anywhere in the code.">Copy URL</button>
+      </div>
+      <button id="btnDelAsset" class="btn ghost wide danger-btn" data-tip="Delete this asset from the library. Clips that reference it will show a broken image.">Delete asset</button>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <span id="assetHint" class="dlg-hint"></span>
+    <button class="btn ghost" id="btnAssetClose" data-tip="Close the viewer.">Close</button>
+  </div>
+</dialog>
+
+<dialog id="dlgParts" class="dlg parts-dlg">
+  <h3>Export parts</h3>
+  <p class="dlg-hint">Each ticked item becomes its own file: footage as picture, sound or both; sound as WAV or MP3; titles and captions as alpha renders; and the words of that range, re-based to zero so they line up with the sound. Run the sound through a voice tool, then <b>Replace sound with…</b> brings it back.</p>
+  <div class="parts-tools">
+    <button id="btnPartsAll" class="btn ghost small" data-tip="Tick every item.">All</button>
+    <button id="btnPartsNone" class="btn ghost small" data-tip="Untick every item.">None</button>
+  </div>
+  <div id="partsList" class="parts-list"></div>
+  <div class="settings parts-settings">
+    <label class="wide" data-tip="For footage: picture only, sound only, or both. Auto = both for footage, sound for items on audio tracks.">Footage as
+      <select id="partsWhat"><option value="auto">auto</option><option value="both">picture + sound</option><option value="video">picture only</option><option value="audio">sound only</option></select>
+    </label>
+    <label data-tip="WAV is lossless and what voice tools expect; MP3 is small.">Sound<select id="partsAudioFmt"><option value="wav">WAV</option><option value="mp3">MP3</option></select></label>
+    <label data-tip="MP4 plays everywhere; MOV is ProRes for editing again.">Picture<select id="partsVideoFmt"><option value="mp4">MP4</option><option value="mov">MOV</option></select></label>
+    <label class="check" data-tip="Include the transcript excerpt of each part as an .srt starting at 0."><input id="partsWords" type="checkbox" checked> words (.srt)</label>
+    <label class="check" data-tip="Bundle everything into one .zip and download it."><input id="partsZip" type="checkbox" checked> bundle as zip</label>
+    <div class="insp-sub">
+      <label class="check wide" data-tip="Also export a stretch of the finished mix — every track together — between two timeline times."><input id="partsRangeOn" type="checkbox"> range of the whole mix</label>
+      <label>From<span class="unit"><input id="partsFrom" type="number" min="0" step="0.1" data-tip="Timeline time where the range starts, in seconds."> s</span></label>
+      <label>To<span class="unit"><input id="partsTo" type="number" min="0" step="0.1" data-tip="Timeline time where the range ends, in seconds."> s</span></label>
+      <label class="wide">Output<select id="partsRangeOutput" data-tip="What the range export carries."><option value="both">picture + sound</option><option value="video">picture only</option><option value="audio">sound only</option></select></label>
+    </div>
+  </div>
+  <p id="partsProgress" class="note"></p>
+  <div id="partsResult" class="result parts-result"></div>
+  <div class="dlg-foot">
+    <button class="btn ghost" id="btnPartsClose" data-tip="Close without exporting.">Close</button>
+    <button class="btn primary" id="btnPartsRun" data-tip="Export the ticked parts.">Export</button>
+  </div>
+</dialog>
+
+<dialog id="dlgExtract" class="dlg extract-dlg">
+  <h3>Extract from footage</h3>
+  <p class="dlg-hint">Frames and sprite sheets land in Assets, where any clip can use them. A sprite sheet plays real footage inside an animation clip. Sub-clips land in Media.</p>
+  <div class="settings">
+    <label class="wide">Source<select id="exSource" data-tip="Which footage to take the frames from."></select></label>
+    <label class="wide">What
+      <select id="exMode" data-tip="A series of still frames, a sprite sheet that plays inside a clip, or a trimmed copy of the footage.">
+        <option value="frames">Frame series → Assets</option>
+        <option value="sprite">Sprite sheet → Assets (footage inside a clip)</option>
+        <option value="subclip">Sub-clip → Media</option>
+      </select>
+    </label>
+    <label data-tip="Source time, in seconds.">From<span class="unit"><input id="exFrom" type="number" min="0" step="0.1"> s</span></label>
+    <label data-tip="Source time, in seconds.">To<span class="unit"><input id="exTo" type="number" min="0" step="0.1"> s</span></label>
+    <label id="exRowCount" data-tip="How many frames, spread evenly. Up to 60.">Frames<input id="exCount" type="number" min="1" max="60" step="1" value="6"></label>
+    <label id="exRowFps" data-tip="Frames per second in the sheet. A long range plays slower rather than growing the sheet: 64 frames at most.">FPS<input id="exFps" type="number" min="1" max="30" step="1" value="10"></label>
+    <label id="exRowWidth" data-tip="Width of each frame in pixels. 320 keeps a sheet around a megabyte; every exported frame of a clip using it re-embeds the whole sheet.">Width<input id="exWidth" type="number" min="32" max="3840" step="2" value="320"></label>
+    <label class="check" id="exRowPng" data-tip="PNG keeps transparency and exact pixels at several times the size. JPEG is right for footage."><input id="exPng" type="checkbox"> PNG</label>
+  </div>
+  <p id="exResult" class="result"></p>
+  <div class="dlg-foot">
+    <button class="btn ghost" id="btnExtractClose" data-tip="Close without extracting.">Close</button>
+    <button class="btn primary" id="btnExtractRun" data-tip="Run the extraction. Frames and sheets go to Assets, sub-clips to Media.">Extract</button>
+  </div>
+</dialog>
+
+<dialog id="dlgCaptions" class="dlg captions-dlg">
+  <h3>Export captions</h3>
+  <p class="dlg-hint">One subtitle file, timed as the captions fall on the timeline — so it lines up with the rendered video. Plain text gives the words alone, one line per caption.</p>
+  <div class="settings">
+    <label class="wide" data-tip="Which caption items go into the file.">From
+      <select id="capExScope">
+        <option value="item">the selected caption item</option>
+        <option value="selection">the selected items</option>
+        <option value="timeline">the whole timeline</option>
+      </select>
+    </label>
+    <label data-tip="SRT and WebVTT are subtitle files players and platforms read; TXT is the words alone.">Format
+      <select id="capExFormat"><option value="srt">SRT</option><option value="vtt">WebVTT</option><option value="txt">Plain text</option></select>
+    </label>
+    <label data-tip="Timeline: as the captions play in the rendered video. Source: the original file's own times (one transcript only).">Times
+      <select id="capExTimes"><option value="timeline">timeline</option><option value="source">source</option></select>
+    </label>
+    <label class="wide" data-tip="File name, without the extension.">Name<input id="capExName" type="text" spellcheck="false"></label>
+  </div>
+  <p id="capExInfo" class="note"></p>
+  <p id="capExResult" class="result"></p>
+  <div class="dlg-foot">
+    <button class="btn ghost" id="btnCapExClose" data-tip="Close without exporting.">Close</button>
+    <button class="btn primary" id="btnCapExRun" data-tip="Write the file into Exports and download it.">Export</button>
+  </div>
+</dialog>
+
+<dialog id="dlgSnippets" class="dlg">
+  <h3>Snippets</h3>
+  <p class="dlg-hint">Replaces the current clip's HTML, CSS and JS.</p>
+  <ul id="snippetList" class="project-list"></ul>
+  <div class="dlg-foot">
+    <button class="btn ghost" data-tip="Close without changing the clip." onclick="document.getElementById('dlgSnippets').close()">Close</button>
+  </div>
+</dialog>
+
+<!-- Transcription and voice. Written by initIntegrations() in integrations.js;
+     the markup here is only the shell it fills. -->
+<dialog id="dlgSpeech" class="dlg speech-dlg">
+  <h3>Transcription and voice</h3>
+  <p class="dlg-hint" id="speechIntro"></p>
+  <div class="speech-tabs seg" role="tablist">
+    <button class="seg-btn active" data-speech-tab="stt" role="tab" data-tip="Turning what is said in a clip into words you can edit and place as captions.">Write down speech</button>
+    <button class="seg-btn" data-speech-tab="tts" role="tab" data-tip="Turning a script into a voice — read aloud here, or recorded into your video.">Read text aloud</button>
+  </div>
+  <div id="speechBody" class="speech-body"></div>
+  <div class="dlg-foot">
+    <span id="speechNote" class="dlg-hint"></span>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="btnSpeechForget" data-tip="Delete every API key this browser is holding. Addresses and choices are kept.">Forget my keys</button>
+    <button class="btn" id="btnSpeechClose" data-tip="Close. Everything is saved as you change it.">Close</button>
+  </div>
+</dialog>
+
+<!-- Writing down what is said: a file in, an editable transcript out. -->
+<dialog id="dlgTranscribe" class="dlg speech-dlg">
+  <h3>Write down what is said</h3>
+  <p class="dlg-hint" id="trHint"></p>
+  <div class="settings">
+    <label class="wide" data-tip="Which file to listen to. Only files with sound are listed.">Sound
+      <select id="trSource"></select>
+    </label>
+    <label data-tip="Leave it as auto unless it guesses wrong. A two-letter code like en, es, fr.">Language
+      <input id="trLang" type="text" spellcheck="false" placeholder="auto">
+    </label>
+    <label data-tip="Where the sound goes to be listened to. Change it with the microphone button in the header.">Listened to
+      <input id="trWhere" type="text" readonly tabindex="-1">
+    </label>
+  </div>
+  <div class="run-bar" id="trProgress" hidden>
+    <div class="run-track"><div class="run-fill"></div></div>
+    <span id="trStep" class="run-step"></span>
+  </div>
+  <p class="result" id="trResult"></p>
+  <div class="dlg-foot">
+    <button class="btn ghost" id="btnTrStop" hidden data-tip="Stop it. Nothing is kept.">Stop</button>
+    <button class="btn" id="btnTrPlace" hidden data-tip="Drop the words on a track at the playhead as captions.">Place as captions</button>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="btnTrClose">Close</button>
+    <button class="btn primary" id="btnTrRun" data-tip="Listen to the file and write down what is said.">Write it down</button>
+  </div>
+</dialog>
+
+<!-- Writing a voice-over: a script in, an audio file on the timeline out. -->
+<dialog id="dlgVoice" class="dlg voice-dlg">
+  <h3>Voice-over</h3>
+  <p class="dlg-hint" id="voiceHint"></p>
+  <textarea id="voiceScript" class="voice-script" spellcheck="true" rows="6"
+    placeholder="Type or paste what should be said…"></textarea>
+  <div class="settings">
+    <label data-tip="Which voice reads it.">Voice<select id="voicePick"></select></label>
+    <label data-tip="A name for the audio file in your library.">Name<input id="voiceName" type="text" spellcheck="false" placeholder="voice-over"></label>
+  </div>
+  <p class="note" id="voiceMeta"></p>
+  <!-- The take that was just made, with a real transport. A browser will not
+       always start audio by itself, and a play button nobody has to be told
+       about beats explaining why it did not. -->
+  <audio id="voicePreview" class="voice-preview" controls hidden></audio>
+  <p class="result" id="voiceResult"></p>
+  <div class="dlg-foot">
+    <button class="btn ghost" id="btnVoiceRead" data-tip="Read it aloud here with your computer's own voice, to hear the wording. Nothing is recorded or sent.">Read it aloud</button>
+    <button class="btn ghost" id="btnVoiceTime" data-tip="Find out how long it takes to say, and get the per-word timings — silently, in this browser.">How long is it?</button>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="btnVoiceClose">Close</button>
+    <button class="btn primary" id="btnVoiceMake" data-tip="Record it to an audio file, add it to the library and drop it on an audio track at the playhead.">Add to timeline</button>
+  </div>
+</dialog>
+
+<!-- What an agent can do here, and what to do when it cannot. The header pill
+     opens it; renderAgentDialog() fills it in from the registration status. -->
+<dialog id="dlgAgent" class="dlg agent-dlg">
+  <h3 id="agentDlgTitle">Agents</h3>
+  <div id="agentDlgBody"></div>
+  <div class="dlg-foot">
+    <span id="agentDlgNote" class="dlg-hint"></span>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="btnAgentRecheck" data-tip="Look for document.modelContext again and re-register, without reloading.">Check again</button>
+    <button class="btn" id="btnAgentClose" data-tip="Close.">Close</button>
+  </div>
+</dialog>
+
+<!-- Written by showBootFailure() when init() rejects. A browser that refuses
+     storage otherwise gets a page that looks perfectly fine and does nothing,
+     which is a worse failure than a blank one. -->
+<div id="bootFail" class="boot-fail" hidden></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

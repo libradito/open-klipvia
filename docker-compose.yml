@@ -1,0 +1,67 @@
+# Klipvia, both ways.
+#
+#   docker compose up                  the browser-only editor on :8080
+#   docker compose up studio           that, plus the full editor + ffmpeg on :3000
+#
+# `klipvia` is the one to deploy. It is a web server holding static files: no
+# database, no uploads directory, no session, nothing to back up and nothing to
+# leak. Every project lives in the visitor's own browser.
+#
+# `studio` is for one person's own machine. It writes to ./data and has no
+# login of any kind, so anyone who can reach port 3000 can read and delete
+# every project on it — bind it to localhost, which is what the port mapping
+# below does, and leave it there.
+
+name: klipvia
+
+services:
+  klipvia:
+    build:
+      context: .
+      target: static
+    image: klipvia:static
+    ports:
+      - "${KLIPVIA_PORT:-8080}:80"
+    environment:
+      # Register the origin you will serve from at the Chrome origin trials
+      # console and put the token in .env. Without it visitors need
+      # chrome://flags/#enable-webmcp-testing set by hand, and most will not.
+      WEBMCP_ORIGIN_TRIAL_TOKEN: "${WEBMCP_ORIGIN_TRIAL_TOKEN:-}"
+    restart: unless-stopped
+    # Static files and no state: nothing here should be able to write to its
+    # own filesystem either. The three tmpfs mounts are the only places nginx
+    # and the entrypoint need — caches, the pid file, and the generated
+    # origin-trial include.
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  studio:
+    # Behind a profile, so a bare `docker compose up` brings up the thing you
+    # would actually deploy and nothing else. Naming it — `docker compose up
+    # studio` — is enough to start it; it writes to ./data and wants ffmpeg,
+    # which is not what somebody trying the app for the first time is asking
+    # for.
+    profiles: [studio]
+    build:
+      context: .
+      target: server
+    image: klipvia:server
+    # No authentication exists. Reachable only from this machine unless you
+    # deliberately change the left-hand side, and think hard before you do.
+    ports:
+      - "127.0.0.1:${STUDIO_PORT:-3000}:3000"
+    environment:
+      PORT: "3000"
+      WEBMCP_ORIGIN_TRIAL_TOKEN: "${WEBMCP_ORIGIN_TRIAL_TOKEN:-}"
+    volumes:
+      # Projects, timelines, footage, images, transcripts and renders. The
+      # whole of the state, in one directory you can copy or delete.
+      - ./data:/app/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true

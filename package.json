@@ -1,0 +1,15 @@
+{
+  "name": "klipvia",
+  "version": "0.1.0",
+  "description": "Klipvia — author DOM/CSS/JS animations and cut them with video, audio and captions on one timeline",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.13.5"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

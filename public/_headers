@@ -1,0 +1,11 @@
+# Netlify / Cloudflare Pages read this. Same three concerns as render.yaml.
+/*
+  Origin-Trial: REPLACE_WITH_YOUR_WEBMCP_ORIGIN_TRIAL_TOKEN
+  Cross-Origin-Opener-Policy: same-origin
+  # Unbundled modules with stable names: revalidate, or a redeploy mixes old
+  # and new modules in one page and the failures look like logic bugs.
+  Cache-Control: no-cache
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+/brand/*
+  Cache-Control: public, max-age=604800

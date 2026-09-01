@@ -1,0 +1,13 @@
+node_modules
+.DS_Store
+.claude
+
+# Somebody's actual work: projects, footage, images and renders. The server
+# creates what it needs on first run, so there is nothing here to keep.
+data
+samples
+
+# Machine-local compose settings. The origin-trial token in here is public
+# (it goes out as a response header) but it names one origin, so it is still
+# yours and not the repository's.
+.env
