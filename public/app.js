@@ -1,7 +1,7 @@
 import { createRasterizer } from '/rasterize.js'
 import { studioExport, quickExport, formatBytes } from '/export.js'
 import { SNIPPETS } from '/snippets.js'
-import { initWebMcp } from '/webmcp.js'
+import { initWebMcp } from '/webmcp.js?v=20260903-webmcp-catalog'
 import { INLINE_CAPS, looksLikeSvg } from '/filetype.js'
 import { initIntegrations } from '/integrations.js'
 import * as INTEGRATIONS from '/integrations.js'
