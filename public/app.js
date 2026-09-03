@@ -1121,6 +1121,9 @@ const editor = {
   getProjectName: () => state.project?.name ?? 'untitled',
   getClips: () => state.project?.clips ?? [],
   currentClip,
+  ensureClipMode() {
+    if (state.mode !== 'clip') setMode('clip')
+  },
   snippetNames: () => SNIPPETS.map((s) => s.name),
 
   getStageState() {
@@ -3645,10 +3648,27 @@ async function seedDemo() {
   }
 }
 
-/** Publish the editor to any AI agent running in this browser. */
+let agentRegistrationRevision = 0
+let agentRegistrationTimer = null
+
+function scheduleAgentRegistration() {
+  // Startup changes mode before the first registration. init() performs that
+  // registration after the editor is ready, so there is nothing to refresh yet.
+  if (!window.__webmcp) return
+  clearTimeout(agentRegistrationTimer)
+  agentRegistrationTimer = setTimeout(() => {
+    registerAgentTools().catch((err) => console.warn('could not refresh WebMCP tools', err))
+  }, 0)
+}
+
+/** Publish the current workspace to any AI agent running in this browser. */
 async function registerAgentTools() {
+  const revision = ++agentRegistrationRevision
   const pill = $('mcpState')
-  const status = await initWebMcp(editor, { local: state.local })
+  const status = await initWebMcp(editor, { local: state.local, mode: state.mode })
+  // Rapid mode changes can finish asynchronous registrations out of order.
+  // Only the newest run may describe the catalog that is currently live.
+  if (revision !== agentRegistrationRevision) return status
   window.__webmcp = status
 
   if (status.ok) {
@@ -3656,7 +3676,7 @@ async function registerAgentTools() {
     pill.classList.add('ok')
     setTip(
       pill,
-      `AI agents in this browser can drive the editor.\nvia ${status.via}, ${status.resultStyle} results` +
+      `AI agents in this browser can drive the ${status.mode === 'seq' ? 'timeline' : 'clip'} workspace.\nvia ${status.via}, ${status.resultStyle} results` +
         (status.omitted ? `\n${status.omitted} tool(s) that need ffmpeg are not offered by this browser-only build.` : '') +
         `\n${status.names.join(', ')}`,
       { at: 'bottom' },
@@ -3950,6 +3970,7 @@ function setMode(mode) {
     // mode is rebuilt, so what appears matches the playhead at 0.
     remount()
   }
+  scheduleAgentRegistration()
   requestAnimationFrame(fitStage)
 }
 

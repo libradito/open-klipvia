@@ -35,8 +35,9 @@ tool catalogue, security model, and implementation notes are in
 - **Supported clients:** ChatGPT's in-app browser, or Google Chrome 149 or later
   with `chrome://flags/#enable-webmcp-testing` enabled.
 - **No account is required** for the browser-only build.
-- On load, confirm that the header shows `webmcp · 84 tools` for the browser-only
-  build (`89 tools` when running with the full server and ffmpeg).
+- On load, confirm that the header shows `webmcp · … tools`. The count follows
+  the visible workspace: focused clip tools in Clip mode and focused editing,
+  inspection, speech, and render tools in Timeline mode.
 - Ask the agent to list projects, open the seeded demo, inspect its timeline,
   make a visible edit, capture a frame, run `check_timeline`, and render it.
 - **Demo video:** _Add the public YouTube URL before submitting._
@@ -1559,11 +1560,14 @@ WebMCP is behind an origin trial. For local development:
 
 1. Open `chrome://flags/#enable-webmcp-testing`, set it to **Enabled**
 2. Relaunch Chrome
-3. Load the editor — the header pill should read **webmcp · 89 tools**
+3. Load the editor — the header pill should read **webmcp · … tools**
 
-The count is the honest one for the build you are on: **89 with the server, 84
-without**, because the five tools that are really ffmpeg are not registered
-where there is no ffmpeg to run them.
+The count follows the workspace on screen. Clip mode publishes the animation
+tools; Timeline mode publishes the editing, inspection, speech and render tools.
+A small navigation bridge remains available so an agent can open a timeline or
+select a clip and the catalog refreshes automatically. A browser-only build also
+omits the five tools that require ffmpeg rather than advertising operations it
+cannot complete.
 
 The pill reads `webmcp off` when the flag is not on; everything else still works.
 To serve the editor from a real origin instead, register that origin at the

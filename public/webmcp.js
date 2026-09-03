@@ -5,10 +5,12 @@
  * on 2026-08-10; Chrome kept the old name as a deprecated alias, and the `@mcp-b`
  * polyfills still ship the older `provideContext()` surface. Both are handled.
  *
- * Two tool sets are registered: the clip tools (author one animation) and the
- * timeline tools (cut footage, sound, overlays and captions on the timeline).
- * Both drive the same `editor` facade the UI uses, so an agent's edits land
- * in the same undo history as a hand's.
+ * The page registers the tool family for the workspace on screen: clip tools
+ * while authoring an animation, timeline tools while cutting the film, plus a
+ * small navigation bridge in both directions. This keeps the live catalog
+ * relevant to page state and below browser-client size limits. Both families
+ * drive the same `editor` facade the UI uses, so an agent's edits land in the
+ * same undo history as a hand's.
  *
  * Enable locally with chrome://flags/#enable-webmcp-testing, then relaunch.
  * With the flag off this module registers nothing and the editor behaves exactly
@@ -690,6 +692,7 @@ function buildTools(editor) {
       run: async ({ clipId }) => {
         const clip = pick(clipId)
         await editor.selectClip(clip.id)
+        editor.ensureClipMode()
         return `Selected ${clip.id} "${clip.name}".`
       },
     },
@@ -2459,7 +2462,7 @@ function unknownArguments(tool, bad, known) {
  * Register the editor's tools with the browser's model context.
  * Returns a status object for the UI; never throws.
  */
-export async function initWebMcp(editor, { local = false } = {}) {
+export async function initWebMcp(editor, { local = false, mode = 'clip' } = {}) {
   const isLocalBuild = () => local
 
   const { ctx, via } = resolveContainer()
@@ -2479,12 +2482,24 @@ export async function initWebMcp(editor, { local = false } = {}) {
         ? 'content'
         : 'string'
 
-  let tools
+  let clipTools
+  let sequenceTools
   try {
-    tools = [...buildTools(editor), ...buildSequenceTools(editor)]
+    clipTools = buildTools(editor)
+    sequenceTools = buildSequenceTools(editor)
   } catch (err) {
     return { ok: false, count: 0, reason: `could not build tools: ${err?.message ?? err}` }
   }
+
+  // A catalog describes the current page state, not every command the app has.
+  // Keep only the navigation needed to cross into the other workspace. Those
+  // navigation calls change the visible mode, which refreshes this catalog.
+  const bridgeNames = mode === 'seq'
+    ? new Set(['list_projects', 'open_project', 'create_project', 'list_clips', 'select_clip'])
+    : new Set(['list_timelines', 'open_timeline', 'create_timeline'])
+  const tools = mode === 'seq'
+    ? [...clipTools.filter((t) => bridgeNames.has(t.name)), ...sequenceTools]
+    : [...clipTools, ...sequenceTools.filter((t) => bridgeNames.has(t.name))]
 
   // An argument the tool does not know is refused, with the nearest real
   // name. Silently ignoring `durationMs` where the tool wants
@@ -2525,7 +2540,8 @@ export async function initWebMcp(editor, { local = false } = {}) {
 
   try {
     controller?.abort()
-    controller = new AbortController()
+    const registrationController = new AbortController()
+    controller = registrationController
 
     if (via === 'document.modelContext' && typeof document.modelContext.registerTool === 'function') {
       // The spec surface, spelled out rather than reached through `ctx`, so
@@ -2542,12 +2558,12 @@ export async function initWebMcp(editor, { local = false } = {}) {
       // which marks the read-only tools). `signal` lets a re-registration
       // replace the previous set instead of stacking on it.
       for (const d of descriptors) {
-        await document.modelContext.registerTool(d, { signal: controller.signal })
+        await document.modelContext.registerTool(d, { signal: registrationController.signal })
       }
     } else if (typeof ctx.registerTool === 'function') {
       // navigator.modelContext, the deprecated alias some builds still expose.
       for (const d of descriptors) {
-        await ctx.registerTool(d, { signal: controller.signal })
+        await ctx.registerTool(d, { signal: registrationController.signal })
       }
     } else if (typeof ctx.provideContext === 'function') {
       // Older surface: set the whole tool list at once.
@@ -2563,6 +2579,7 @@ export async function initWebMcp(editor, { local = false } = {}) {
     ok: true,
     count: descriptors.length,
     omitted: tools.length - usable.length,
+    mode,
     via,
     resultStyle,
     names: usable.map((t) => t.name),
