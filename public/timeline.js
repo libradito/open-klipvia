@@ -18,6 +18,7 @@ import {
 } from '/sequence.js'
 import { keyTimes } from '/keys.js'
 import { setTip } from '/tooltip.js'
+import { icon } from '/icons.js'
 
 const HEAD_W = 146
 const EDGE_PX = 9
@@ -305,7 +306,11 @@ export function createTimeline({ root, getContext, onChange, onSeek, onSelect, o
 
     const label = el('div', 'tl2-item-label')
     const soundOnly = (item.type === 'media' && track.kind === 'audio' && ctx().media.get(item.sourceId)?.hasVideo) || (item.type === 'timeline' && track.kind === 'audio')
-    label.append(el('span', 'tl2-item-name', (soundOnly ? '♪ ' : '') + (item.type === 'timeline' ? '⧉ ' : '') + (item.name || item.type)))
+    const nameEl = el('span', 'tl2-item-name')
+    if (soundOnly) nameEl.append(icon('music', { size: 11, cls: 'tl2-mark' }))
+    if (item.type === 'timeline') nameEl.append(icon('git-branch', { size: 11, cls: 'tl2-mark' }))
+    nameEl.append(item.name || item.type)
+    label.append(nameEl)
     const secs = (item.durationMs / 1000).toFixed(1)
     label.append(el('span', 'tl2-item-dur', `${secs}s`))
     node.appendChild(label)
@@ -501,8 +506,10 @@ export function createTimeline({ root, getContext, onChange, onSeek, onSelect, o
       const same = seq.tracks.filter((t) => t.kind === track.kind)
       const pos = same.indexOf(track)
       const order = el('div', 'tl2-head-order')
-      const arrow = (glyph, to, disabled, tip, key) => {
-        const b = el('button', 'tl2-obtn', glyph)
+      const arrow = (name, label, to, disabled, tip, key) => {
+        const b = el('button', 'tl2-obtn')
+        b.setAttribute('aria-label', label)
+        b.append(icon(name, { size: 10 }))
         b.disabled = disabled
         setTip(b, tip, { key })
         b.onclick = (e) => {
@@ -512,15 +519,17 @@ export function createTimeline({ root, getContext, onChange, onSeek, onSelect, o
         return b
       }
       order.append(
-        arrow('▲', 'up', pos <= 0, 'Move this track up — it will draw over the one above.', '⌥↑'),
-        arrow('▼', 'down', pos >= same.length - 1, 'Move this track down — the one above will draw over it.', '⌥↓'),
+        arrow('chevron-up', 'Move track up', 'up', pos <= 0, 'Move this track up — it will draw over the one above.', '⌥↑'),
+        arrow('chevron-down', 'Move track down', 'down', pos >= same.length - 1, 'Move this track down — the one above will draw over it.', '⌥↓'),
       )
       head.append(order, name)
       head.appendChild(trackGrip(track, row))
 
       const buttons = el('div', 'tl2-head-btns')
       if (track.kind === 'video') {
-        const eye = el('button', `tl2-tbtn${track.hidden ? ' off' : ''}`, track.hidden ? '◌' : '◉')
+        const eye = el('button', `tl2-tbtn${track.hidden ? ' off' : ''}`)
+        eye.setAttribute('aria-label', track.hidden ? 'Show track' : 'Hide track')
+        eye.append(icon(track.hidden ? 'eye-off' : 'eye', { size: 13 }))
         setTip(eye, track.hidden ? 'Track hidden — click to show it.' : 'Hide this track from the preview and the render.')
         eye.onclick = (e) => {
           e.stopPropagation()
@@ -529,7 +538,9 @@ export function createTimeline({ root, getContext, onChange, onSeek, onSelect, o
         }
         buttons.appendChild(eye)
       }
-      const lock = el('button', `tl2-tbtn${track.locked ? ' on' : ''}`, track.locked ? '🔒' : '🔓')
+      const lock = el('button', `tl2-tbtn${track.locked ? ' on' : ''}`)
+      lock.setAttribute('aria-label', track.locked ? 'Unlock track' : 'Lock track')
+      lock.append(icon(track.locked ? 'lock' : 'unlock', { size: 13 }))
       setTip(lock, track.locked
         ? 'Track locked — ripple edits and silence removal leave it alone. Click to unlock.'
         : 'Lock this track so ripple edits and silence removal leave it alone.')
@@ -540,7 +551,9 @@ export function createTimeline({ root, getContext, onChange, onSeek, onSelect, o
       }
       buttons.appendChild(lock)
 
-      const mute = el('button', `tl2-tbtn${track.muted ? ' off' : ''}`, track.muted ? '🔇' : '🔊')
+      const mute = el('button', `tl2-tbtn${track.muted ? ' off' : ''}`)
+      mute.setAttribute('aria-label', track.muted ? 'Unmute track' : 'Mute track')
+      mute.append(icon(track.muted ? 'volume-x' : 'volume', { size: 13 }))
       setTip(mute, track.muted ? 'Track muted — click to unmute.' : 'Mute this track.')
       mute.onclick = (e) => {
         e.stopPropagation()

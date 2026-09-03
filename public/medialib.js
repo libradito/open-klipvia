@@ -11,6 +11,8 @@
  */
 
 import { setTip } from '/tooltip.js'
+import { icon } from '/icons.js'
+import { languageName } from '/languages.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -29,7 +31,13 @@ export const fmtClock = (ms) => {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpeech = null }) {
+/**
+ * `onTranscribe(filename)` opens the Transcribe window on that file;
+ * `speechLine()` is "VoiceBox · on your machine" or null, for the tile tips;
+ * `voiceOvers()` maps a library filename to the voice that read it, for the
+ * Voice-overs list in the Speech rail.
+ */
+export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onTranscribe = null, speechLine = null, voiceOvers = null }) {
   /** filename -> MediaItem */
   const media = new Map()
   /** transcript id -> full transcript, loaded on demand */
@@ -188,7 +196,11 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
   function render() {
     renderMedia()
     renderTranscripts()
+    renderVoiceOvers()
   }
+
+  const anySound = () => [...media.values()].some((m) => m.hasAudio)
+  const transcriptFor = (filename) => transcriptList.find((t) => t.mediaFilename === filename) ?? null
 
   function renderMedia() {
     const grid = $('mediaGrid')
@@ -209,15 +221,23 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
     }
 
     for (const m of media.values()) {
+      const withSound = !!m.hasAudio || m.kind === 'audio'
+      const transcript = withSound ? transcriptFor(m.filename) : null
       const tile = document.createElement('div')
-      tile.className = `media-tile ${m.kind}`
+      tile.className = `media-tile ${m.kind}${transcript ? ' transcribed' : ''}`
       tile.dataset.media = m.filename
       dragPayload(tile, { kind: 'media', id: m.filename })
 
       const thumb = document.createElement('div')
       thumb.className = 'media-thumb'
       if (m.posterUrl) thumb.style.backgroundImage = `url("${m.posterUrl}")`
-      else thumb.textContent = m.kind === 'audio' ? '♪' : '▦'
+      else thumb.append(icon(m.kind === 'audio' ? 'audio-lines' : 'film', { size: 18 }))
+      if (transcript && m.posterUrl) {
+        const badge = document.createElement('span')
+        badge.className = 'media-tr'
+        badge.append(icon('captions', { size: 11 }))
+        thumb.appendChild(badge)
+      }
       thumb.appendChild(
         Object.assign(document.createElement('span'), { className: 'media-dur', textContent: fmtClock(m.durationMs) }),
       )
@@ -228,9 +248,10 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
       meta.appendChild(Object.assign(document.createElement('div'), { className: 'mname', textContent: m.name }))
       meta.appendChild(Object.assign(document.createElement('div'), {
         className: 'msub',
-        textContent: m.kind === 'video'
+        textContent: (m.kind === 'video'
           ? `${m.width}×${m.height}${m.fps ? ` · ${Math.round(m.fps)}fps` : ''}${m.hasAudio ? ' · sound' : ' · silent'}`
-          : `${m.channels === 1 ? 'mono' : 'stereo'} · ${((m.sampleRate ?? 0) / 1000).toFixed(1)}kHz`,
+          : `${m.channels === 1 ? 'mono' : 'stereo'} · ${((m.sampleRate ?? 0) / 1000).toFixed(1)}kHz`) +
+          (transcript ? ' · transcribed' : ''),
       }))
       tile.appendChild(meta)
 
@@ -238,13 +259,35 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
         tile,
         `${m.name}\n${m.kind} · ${fmtClock(m.durationMs)} · ${fmtSize(m.size)}\n` +
           `${m.vcodec ? `${m.vcodec} ` : ''}${m.acodec ?? ''}\n` +
-          `Drag onto a track, or click to insert at the playhead.`,
+          (withSound ? 'Drag onto a track, click to insert at the playhead, or Transcribe.' : 'Drag onto a track, or click to insert at the playhead.'),
         { at: 'right' },
       )
 
+      if (withSound) {
+        const tr = document.createElement('button')
+        tr.className = 'media-transcribe'
+        tr.textContent = 'Transcribe'
+        tr.dataset.tool = 'transcribe_media'
+        tr.setAttribute('aria-label', transcript ? 'Transcribe again' : 'Transcribe')
+        const line = speechLine?.() ?? null
+        setTip(
+          tr,
+          transcript
+            ? 'Transcribed. Click to transcribe again.'
+            : 'Transcribe: write down what is said, as a transcript you can place as captions.\n' +
+                (line ?? 'Nothing is set up to listen yet; the window will ask.'),
+        )
+        tr.onclick = (e) => {
+          e.stopPropagation()
+          onTranscribe?.(m.filename)
+        }
+        tile.appendChild(tr)
+      }
+
       const add = document.createElement('button')
       add.className = 'media-add'
-      add.textContent = '+'
+      add.setAttribute('aria-label', 'Insert at the playhead')
+      add.append(icon('plus', { size: 13 }))
       setTip(add, 'Insert at the playhead')
       add.onclick = (e) => {
         e.stopPropagation()
@@ -254,7 +297,8 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
 
       const del = document.createElement('button')
       del.className = 'media-del'
-      del.textContent = '×'
+      del.setAttribute('aria-label', 'Remove from the library')
+      del.append(icon('x', { size: 13 }))
       setTip(del, 'Remove from the library. Click twice to confirm.')
       let armed = false
       del.onclick = async (e) => {
@@ -280,25 +324,25 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
     const list = $('transcriptList')
     if (!list) return
     list.innerHTML = ''
+    // The count in the group's head, beside its name.
+    const meta = document.querySelector('.insp-section[data-section="transcripts"] .insp-section-meta')
+    if (meta) meta.textContent = transcriptList.length ? String(transcriptList.length) : ''
+
+    // The button stays live with nothing to listen to: the window it opens
+    // says so and offers to import a clip, which a dead button cannot do.
+    const sound = anySound()
 
     if (!transcriptList.length) {
-      list.appendChild(Object.assign(document.createElement('p'), {
-        className: 'rail-empty',
-        textContent: 'Drop an .srt, .vtt or Whisper .json.',
-      }))
-      // The quiet half of the offer. Somebody looking at an empty transcript
-      // list is already thinking about words, which is the one moment worth
-      // mentioning that Klipvia can write them — a line here rather than a
-      // dialog on first run, because nobody arrives wanting to be onboarded.
-      const offer = Object.assign(document.createElement('p'), { className: 'rail-empty' })
-      const link = Object.assign(document.createElement('button'), {
-        className: 'link-btn',
-        textContent: 'write one from your footage',
-        onclick: () => onSetUpSpeech?.(),
-      })
-      link.dataset.tip = "Transcribe a clip with Whisper — on your own machine, or a provider you choose. Nothing is set up until you pick something."
-      offer.append(document.createTextNode('Or '), link, document.createTextNode('.'))
-      list.appendChild(offer)
+      const empty = Object.assign(document.createElement('p'), { className: 'rail-empty', textContent: 'No transcripts yet.' })
+      const sub = document.createElement('span')
+      sub.className = 'rail-empty-sub'
+      if (sound) {
+        sub.textContent = 'or drop an .srt, .vtt or Whisper .json here.'
+      } else {
+        sub.textContent = 'Import a clip with sound, or drop an .srt, .vtt or Whisper .json here.'
+      }
+      empty.appendChild(sub)
+      list.appendChild(empty)
       return
     }
 
@@ -308,13 +352,20 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
       row.dataset.transcript = t.id
       dragPayload(row, { kind: 'transcript', id: t.id })
 
-      row.appendChild(Object.assign(document.createElement('div'), { className: 'tr-name', textContent: t.name }))
+      const ico = document.createElement('div')
+      ico.className = 'tr-ico'
+      ico.append(icon('captions', { size: 16 }))
+      row.appendChild(ico)
+      const meta = document.createElement('div')
+      meta.className = 'tr-meta'
+      meta.appendChild(Object.assign(document.createElement('div'), { className: 'tr-name', textContent: t.name }))
       const bound = t.mediaFilename ? media.get(t.mediaFilename)?.name : null
-      row.appendChild(Object.assign(document.createElement('div'), {
+      meta.appendChild(Object.assign(document.createElement('div'), {
         className: 'tr-sub',
         textContent: `${t.cueCount} cues · ${fmtClock(t.durationMs)}${t.wordLevel ? ' · words' : ''}` +
           (bound ? ` · ${bound}` : ''),
       }))
+      row.appendChild(meta)
       setTip(
         row,
         `${t.name}\n${t.source.toUpperCase()} · ${t.cueCount} cues${t.wordLevel ? ' · word-level timings' : ''}\n` +
@@ -327,28 +378,32 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
       acts.className = 'tr-acts'
 
       const srt = document.createElement('button')
-      srt.textContent = '↓srt'
+      srt.setAttribute('aria-label', 'Download as SRT')
+      srt.append(icon('download', { size: 11 }), 'srt')
       setTip(srt, 'Download as an .srt sidecar file')
       srt.onclick = (e) => {
         e.stopPropagation()
         window.location.href = `/api/transcripts/${t.id}/export?format=srt`
       }
       const vtt = document.createElement('button')
-      vtt.textContent = '↓vtt'
+      vtt.setAttribute('aria-label', 'Download as WebVTT')
+      vtt.append(icon('download', { size: 11 }), 'vtt')
       setTip(vtt, 'Download as a WebVTT sidecar file')
       vtt.onclick = (e) => {
         e.stopPropagation()
         window.location.href = `/api/transcripts/${t.id}/export?format=vtt`
       }
       const edit = document.createElement('button')
-      edit.textContent = '✎'
+      edit.setAttribute('aria-label', 'Edit transcript')
+      edit.append(icon('pencil', { size: 12 }))
       setTip(edit, 'Open the transcript editor: every line, its times and words, fixable while the timeline plays.')
       edit.onclick = (e) => {
         e.stopPropagation()
         onEdit?.(t.id)
       }
       const del = document.createElement('button')
-      del.textContent = '×'
+      del.setAttribute('aria-label', 'Delete transcript')
+      del.append(icon('x', { size: 12 }))
       del.className = 'danger'
       setTip(del, 'Delete this transcript. Click twice to confirm.')
       let armed = false
@@ -368,6 +423,90 @@ export function initMediaLibrary({ onInsert, onStatus, onEdit = null, onSetUpSpe
       row.appendChild(acts)
 
       row.onclick = () => onInsert?.({ kind: 'transcript', id: t.id })
+      list.appendChild(row)
+    }
+  }
+
+  /**
+   * The Voice-overs group: every library audio file a voice read from a
+   * script. They are ordinary media (the Media rail lists them too); this
+   * list is the one that says which voice and language, and drags with the
+   * same payload.
+   */
+  function renderVoiceOvers() {
+    const list = $('voiceList')
+    if (!list) return
+    list.innerHTML = ''
+    const marks = voiceOvers?.() ?? {}
+    const rows = [...media.values()].filter((m) => marks[m.filename]).reverse()
+    const meta = document.querySelector('.insp-section[data-section="voiceovers"] .insp-section-meta')
+    if (meta) meta.textContent = rows.length ? String(rows.length) : ''
+
+    if (!rows.length) {
+      const empty = Object.assign(document.createElement('p'), { className: 'rail-empty', textContent: 'No voice-overs yet.' })
+      empty.appendChild(Object.assign(document.createElement('span'), {
+        className: 'rail-empty-sub',
+        textContent: 'Type a script, pick a voice, and the audio lands on a track.',
+      }))
+      list.appendChild(empty)
+      return
+    }
+
+    for (const m of rows) {
+      const mark = marks[m.filename]
+      const row = document.createElement('div')
+      row.className = 'tr-row voice-row'
+      row.dataset.media = m.filename
+      dragPayload(row, { kind: 'media', id: m.filename })
+
+      const ico = document.createElement('div')
+      ico.className = 'tr-ico'
+      ico.append(icon('mic', { size: 16 }))
+      row.appendChild(ico)
+      const info = document.createElement('div')
+      info.className = 'tr-meta'
+      info.appendChild(Object.assign(document.createElement('div'), { className: 'tr-name', textContent: m.name }))
+      const bits = [mark.voiceName || mark.voice, mark.language ? languageName(mark.language) : null, fmtClock(m.durationMs)].filter(Boolean)
+      info.appendChild(Object.assign(document.createElement('div'), { className: 'tr-sub', textContent: bits.join(' · ') }))
+      row.appendChild(info)
+      setTip(
+        row,
+        `${m.name}\n${bits.join(' · ')}${mark.provider ? ` · ${mark.provider}` : ''}\n` +
+          'Drag onto an audio track, or click to add at the playhead.',
+        { at: 'right' },
+      )
+
+      const acts = document.createElement('div')
+      acts.className = 'tr-acts'
+      const add = document.createElement('button')
+      add.setAttribute('aria-label', 'Insert at the playhead')
+      add.append(icon('plus', { size: 12 }))
+      setTip(add, 'Insert at the playhead, on an audio track.')
+      add.onclick = (e) => {
+        e.stopPropagation()
+        onInsert?.({ kind: 'media', id: m.filename })
+      }
+      const del = document.createElement('button')
+      del.setAttribute('aria-label', 'Remove from the library')
+      del.append(icon('x', { size: 12 }))
+      del.className = 'danger'
+      setTip(del, 'Remove from the library. Click twice to confirm.')
+      let armed = false
+      del.onclick = async (e) => {
+        e.stopPropagation()
+        if (!armed) {
+          armed = true
+          del.classList.add('confirm')
+          setTimeout(() => { armed = false; del.classList.remove('confirm') }, 3000)
+          return
+        }
+        await fetch(`/api/media/${m.filename}`, { method: 'DELETE' })
+        onStatus?.(`removed ${m.name}; items using it will show as missing`)
+        await refresh()
+      }
+      acts.append(add, del)
+      row.appendChild(acts)
+      row.onclick = () => onInsert?.({ kind: 'media', id: m.filename })
       list.appendChild(row)
     }
   }

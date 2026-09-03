@@ -22,6 +22,7 @@
 
 import { blendOf, colourOf, cropOf, flipsOf, radiusOf, rotationOf, shadowOf } from '/effects.js'
 import { KEYABLE, keysFor } from '/keys.js'
+import { baseLang, groupVoices, languageName } from '/languages.js'
 
 const OUTPUT_BUDGET = 1500
 
@@ -169,7 +170,7 @@ const destination = (d) =>
 function egressRefused(job, d) {
   return (
     `${job} sends audio to ${d.host ?? d.label}, and agent-initiated sending is switched off. ` +
-    `Ask the person to run it themselves, or to turn on "Let an agent send audio out" in Transcription and voice. ` +
+    `Ask the person to run it themselves, or to turn on "Let an agent send audio out" under Speech providers. ` +
     `Anything set to run on their own machine works without that.`
   )
 }
@@ -185,7 +186,7 @@ function notSetUp(what, detail) {
   return (
     `No ${what} is set up in this browser yet` +
     (detail?.set ? ` — ${detail.label} is chosen but ${detail.why}.` : '.') +
-    `\nAsk the person to open the microphone button in the header. There are three kinds of answer: ` +
+    `\nAsk the person to open the Speech tab in the left rail and press Providers… (the Transcribe a clip… and Write a voice-over… buttons there ask on their own). There are three kinds of answer: ` +
     `their computer's own voices (free, offline, nothing sent), a Whisper or voice server on their own machine, ` +
     `or a hosted provider with their key. Only they can enter a key. ` +
     `time_script needs none of it and works now.`
@@ -221,6 +222,12 @@ function parseBackground(value) {
   if (/^#[0-9a-f]{6}$/.test(v)) return { mode: 'color', color: v }
   throw new Error(`background must be "transparent", "green", or #rrggbb — got "${value}"`)
 }
+
+/** What a new asset or media file is called back as. Short: never the bytes it came from. */
+const addedAsset = (a) =>
+  `Added ${a.url}${a.width ? ` (${a.width}x${a.height})` : ''}, ${(a.size / 1024).toFixed(0)}KB. Use it with <img src="${a.url}">, or on the timeline with add_to_timeline kind image.`
+const addedMedia = (m) =>
+  `Added ${m.filename}: ${m.kind}, ${(m.durationMs / 1000).toFixed(2)}s${m.hasVideo ? `, ${m.width}x${m.height}` : ''}${m.hasAudio ? ', with audio' : ', silent'}. Use it as sourceId in add_to_timeline.`
 
 /* ---------------------------------------------------------------- tools */
 
@@ -430,7 +437,7 @@ function buildTools(editor) {
       inputSchema: { type: 'object', properties: {} },
       run: async () => {
         const rows = await editor.listAssets()
-        if (!rows.length) return 'No assets yet. Use add_asset_from_url, or drag a file into the editor.'
+        if (!rows.length) return 'No assets yet. Use add_asset_from_url (a public or data: URL), add_asset_text for an SVG, or drag a file into the editor.'
         return rows
           .slice(0, 30)
           .map(
@@ -445,19 +452,37 @@ function buildTools(editor) {
     {
       name: 'add_asset_from_url',
       description:
-        'Download an image or font from a public URL into the asset library and return its local /assets/ URL, ready to use in a clip. Only http(s) sources.',
+        'Bring an image or font into the asset library and get its /assets/ URL, ready for a clip. url is a public http(s) URL, or — when you hold the bytes yourself — a data: URL (base64; 8 MB decoded at most). The bytes are sniffed: png, jpg, webp, gif, avif, svg, woff2, woff, ttf, otf; anything else is refused. For an SVG you wrote, add_asset_text is simpler.',
       annotations: { readOnlyHint: false },
       inputSchema: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: 'Public http(s) URL of the image or font.' },
-          name: { type: 'string', description: 'Optional filename, including extension.' },
+          url: { type: 'string', description: 'Public http(s) URL, or data:<mime>;base64,… holding the file (8 MB decoded max).' },
+          name: { type: 'string', description: 'Optional filename. Its extension is corrected if it disagrees with the bytes.' },
         },
         required: ['url'],
       },
       run: async ({ url, name }) => {
         const a = await editor.addAssetFromUrl(url, name)
-        return `Added ${a.url}${a.width ? ` (${a.width}x${a.height})` : ''}, ${(a.size / 1024).toFixed(0)}KB. Use it with <img src="${a.url}">.`
+        return addedAsset(a)
+      },
+    },
+    {
+      name: 'add_asset_text',
+      description:
+        'Save an SVG you wrote as an asset and get its /assets/ URL — a logo, an icon, a shape to animate. name must end in .svg (the one text format the library stores); content is the SVG document, 2 MB at most. Nothing is sanitised: it is a same-origin file, like one the person dropped in. For a raster image or a font, use add_asset_from_url with a data: URL.',
+      annotations: { readOnlyHint: false },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Filename ending in .svg, e.g. "logo.svg".' },
+          content: { type: 'string', description: 'The SVG document, starting with <svg …>.' },
+        },
+        required: ['name', 'content'],
+      },
+      run: async ({ name, content }) => {
+        const a = await editor.addAssetText(name, content)
+        return addedAsset(a)
       },
     },
     {
@@ -764,6 +789,8 @@ function buildTools(editor) {
 /* ------------------------------------------------------- timeline tools */
 
 const fmtT = (ms) => (ms / 1000).toFixed(2)
+/** A shape preset's inspector controls, in add_shape's own parameter names. */
+const SHAPE_PARAM = { radius: 'corners', stroke: 'outlineWidth', accent: 'outline', direction: 'points', text: 'label' }
 
 /**
  * The non-default parts of how an item is drawn.
@@ -945,7 +972,7 @@ function buildSequenceTools(editor) {
       inputSchema: { type: 'object', properties: {} },
       run: () => {
         const rows = editor.listMedia()
-        if (!rows.length) return 'No media yet. Use add_media_from_url, or drop a file into the editor.'
+        if (!rows.length) return 'No media yet. Use add_media_from_url (a public or data: URL), or drop a file into the editor.'
         const lines = rows.map(
           (m) =>
             `${m.filename}  "${m.name}"  ${m.kind}  ${fmtT(m.durationMs)}s` +
@@ -1175,37 +1202,38 @@ function buildSequenceTools(editor) {
     },
     {
       name: 'add_media_from_url',
-      description: 'Download a video or audio file from a public http(s) URL into the media library. It is probed on arrival; the reply gives the filename to use as sourceId.',
+      description:
+        'Bring a video or audio file into the media library. url is a public http(s) URL, or a data: URL (base64; 24 MB decoded at most) when you hold the bytes — a voice-over a tool returned, say. Sniffed on arrival: mp4, m4v, mov, webm, mkv, avi, wav, mp3, m4a, aac, flac, ogg, opus. It is probed and the reply gives the filename to use as sourceId. Anything larger: host it, or ask the person to drop the file in.',
       annotations: { readOnlyHint: false },
       inputSchema: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: 'Public http(s) URL of an mp4, mov, webm, mkv, wav, mp3, m4a, flac or ogg.' },
-          name: { type: 'string', description: 'Optional filename, with extension.' },
+          url: { type: 'string', description: 'Public http(s) URL, or data:<mime>;base64,… holding the file (24 MB decoded max).' },
+          name: { type: 'string', description: 'Optional filename. Its extension is corrected if it disagrees with the bytes.' },
         },
         required: ['url'],
       },
       run: async ({ url, name }) => {
         const m = await editor.addMediaFromUrl(url, name)
-        return `Added ${m.filename}: ${m.kind}, ${fmtT(m.durationMs)}s${m.hasVideo ? `, ${m.width}x${m.height}` : ''}${m.hasAudio ? ', with audio' : ', silent'}. Use it as sourceId in add_to_timeline.`
+        return addedMedia(m)
       },
     },
     {
       name: 'list_text_presets',
       description:
-        'The ready-made animated title styles a text item can use — title, lower third, subtitle bar, pop-words, typewriter, impact, label, quote — with the fields each takes and its default length, plus the plain shapes (rectangle, ellipse, ring, highlight, arrow) that add_shape places. Use with add_text; no clip code needed.',
+        'The ready-made animated title styles a text item can use — title, lower third, subtitle bar, pop-words, typewriter, impact, label, quote — with the fields each takes and its default length, plus the shapes add_shape places (rectangle, ellipse, frame, ring, highlight, line, arrow, marker, check, pulse, pointer), each with the add_shape parameters it takes. Use with add_text; no clip code needed.',
       annotations: { readOnlyHint: true },
       inputSchema: { type: 'object', properties: {} },
       run: () =>
         editor
           .listTextPresets()
-          .map((p) => `${p.id.padEnd(15)} "${p.name}"  ${p.kind === 'shape' ? '[shape: width height color accent radius stroke]' : p.fields.join('+')}  ${fmtT(p.defaultDurationMs)}s  — ${p.note}`)
+          .map((p) => `${p.id.padEnd(15)} "${p.name}"  ${p.kind === 'shape' ? `[shape: ${(p.controls ?? []).map((c) => SHAPE_PARAM[c] ?? c).join(' ')}]` : p.fields.join('+')}  ${fmtT(p.defaultDurationMs)}s  — ${p.note}`)
           .join('\n'),
     },
     {
       name: 'add_text',
       description:
-        'Put an animated title on the timeline from a preset: type the words, pick the preset, place it. (For a rectangle, ring, highlight or arrow use add_shape.) It animates in from its start and out at its end, whatever length it is given. Placement uses anchor; style takes fontFamily, fontSize, color, accent, boxColor, weight, uppercase, align. Convertible to a clip later for full control.',
+        'Put an animated title on the timeline from a preset: type the words, pick the preset, place it. (For a shape — a rectangle, frame, ring, arrow, marker and so on — use add_shape.) It animates in from its start and out at its end, whatever length it is given. Placement uses anchor; style takes fontFamily, fontSize, color, accent, boxColor, weight, uppercase, align. Convertible to a clip later for full control.',
       annotations: { readOnlyHint: false },
       inputSchema: {
         type: 'object',
@@ -1233,19 +1261,28 @@ function buildSequenceTools(editor) {
     {
       name: 'add_shape',
       description:
-        'Put a plain shape on the timeline — rectangle, ellipse, ring, highlight or arrow — sized in timeline pixels and placed by anchor and offsets (default anchor top-left, so offsetX/offsetY are its top-left corner in frame pixels). A rectangle in the footage\'s own colour hides an account name or a detail: save_frame or capture_timeline_frame to read the colour first. A ring or highlight points at something; an arrow says "here". It is a text item with no words, so set_item changes it later (textStyle width/height/radius/stroke/color/accent/direction, offsetX/offsetY, opacity, timing) and it renders like any overlay.',
+        'Put a shape on the timeline, sized in timeline pixels and placed by anchor and offsets (default anchor top-left, so offsetX/offsetY are its top-left corner in frame pixels; anchor center places its middle). ' +
+        'rect and ellipse are solid patches that cut in and out: in the footage\'s own colour (save_frame or capture_timeline_frame to read it) a rect hides an account name or a detail. ' +
+        'frame and ring are outlines that draw themselves on around something (fill none by default). highlight is a translucent wash swiped over a line or a button. ' +
+        'line and arrow draw from one end to the other: points is the end they draw towards, where the arrow\'s head is (for up or down make height the long side). ' +
+        'marker is a numbered dot for steps (label is the number, "1" by default). check is a tick in a disc: the disc pops, then the tick draws. pulse is a dot with rings rippling outward, for "click here". ' +
+        'pointer is a mouse pointer that lands and clicks once; its tip is the item\'s centre, so anchor center plus offsets place the tip. ' +
+        'Lines are white with a small shadow by default; dashed makes a frame, ring, line or arrow dashed (it then fades in rather than drawing on). ' +
+        'It is a text item with no words, so set_item changes it later (textStyle width/height/radius/stroke/color/accent/direction/dashed, text for a marker\'s number, offsetX/offsetY, opacity, timing) and it renders like any overlay.',
       annotations: { readOnlyHint: false },
       inputSchema: {
         type: 'object',
         properties: {
-          shape: { type: 'string', enum: ['rect', 'ellipse', 'ring', 'highlight', 'arrow'], description: 'Default rect.' },
+          shape: { type: 'string', enum: ['rect', 'ellipse', 'frame', 'ring', 'highlight', 'line', 'arrow', 'marker', 'check', 'pulse', 'pointer'], description: 'Default rect.' },
           width: { type: 'number', description: 'Pixels at timeline size. Rounded to even.' },
           height: { type: 'number', description: 'Pixels at timeline size. Rounded to even.' },
-          fill: { type: 'string', description: '#rrggbb, or "none". Rings default to none; a highlight is drawn translucent whatever the colour.' },
-          outline: { type: 'string', description: 'Outline colour #rrggbb (the accent).' },
-          outlineWidth: { type: 'number', description: 'Outline thickness in pixels; 0 = none. Rings default to 10.' },
-          corners: { type: 'number', description: 'Corner radius in pixels for a rectangle or highlight.' },
-          points: { type: 'string', enum: ['right', 'left', 'up', 'down'], description: 'Arrow direction. Default right.' },
+          fill: { type: 'string', description: '#rrggbb, or "none": the patch, the marker or check disc, the pulse\'s dot, the pointer\'s body. Frames and rings default to none; a highlight is drawn translucent whatever the colour.' },
+          outline: { type: 'string', description: 'Line colour #rrggbb: a patch\'s outline, the stroke of a frame, ring, line or arrow, the marker\'s number, the check\'s tick, the pulse\'s rings, the pointer\'s edge. Default white (the pointer\'s is near-black).' },
+          outlineWidth: { type: 'number', description: 'Line weight in pixels. 0 = no outline on a patch, marker or check; frames, rings, lines and arrows default to 6; pulse rings and the pointer\'s edge to 4.' },
+          corners: { type: 'number', description: 'Corner radius in pixels for a rect, frame, highlight, marker or check. 999 is a circle (the marker and check default).' },
+          points: { type: 'string', enum: ['right', 'left', 'up', 'down'], description: 'Line and arrow: the end it draws towards, where the head is. Default right.' },
+          dashed: { type: 'boolean', description: 'Frame, ring, line, arrow: draw the stroke dashed. A dashed stroke fades in rather than drawing on.' },
+          label: { type: 'string', description: 'Marker: the number or short label in the dot. Default "1".' },
           opacity: { type: 'number', description: 'Whole-item opacity 0–1. Default 1.' },
           anchor: { type: 'string', enum: ['center', 'top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'], description: 'Where the offsets are measured from. Default top-left.' },
           offsetX: { type: 'number', description: 'Pixels from the anchor, rightwards.' },
@@ -1265,9 +1302,13 @@ function buildSequenceTools(editor) {
         if (i.outlineWidth != null) style.stroke = i.outlineWidth
         if (i.corners != null) style.radius = i.corners
         if (i.points) style.direction = i.points
+        if (i.dashed != null) style.dashed = !!i.dashed
+        // The marker's number is the item's text; every other shape has no words.
+        const label = i.shape === 'marker' && i.label != null ? String(i.label).trim() : ''
         const { item, track } = await editor.addText({
-          preset: `shape-${i.shape ?? 'rect'}`, text: '', atMs: toMs(i.atSeconds), durationMs: toMs(i.durationSeconds), trackId: i.trackId,
-          anchor: i.anchor ?? 'top-left', offsetX: i.offsetX, offsetY: i.offsetY, opacity: i.opacity, style, name: i.name,
+          preset: `shape-${i.shape ?? 'rect'}`, text: label, atMs: toMs(i.atSeconds), durationMs: toMs(i.durationSeconds), trackId: i.trackId,
+          anchor: i.anchor ?? 'top-left', offsetX: i.offsetX, offsetY: i.offsetY, opacity: i.opacity, style,
+          name: i.name ?? (label ? `Marker ${label}`.slice(0, 40) : undefined),
         })
         return `Added ${item.id} [${item.sourceId}] "${item.name}" on ${track.name}, ${fmtT(item.startMs)}–${fmtT(item.startMs + item.durationMs)}s, ${item.anchor} +${item.offsetX ?? 0},${item.offsetY ?? 0}. capture_timeline_frame to see it.`
       },
@@ -1353,7 +1394,7 @@ function buildSequenceTools(editor) {
           },
           textStyle: {
             type: 'object',
-            description: 'Text items: fontFamily, fontSize, color, accent, boxColor, weight (400-900), uppercase, align (left|center|right).',
+            description: 'Text items: fontFamily, fontSize, color, accent, boxColor, weight (400-900), uppercase, align (left|center|right). Shapes: width, height, radius, stroke (the one line weight), color (fill), accent (line), direction (right|left|up|down), dashed; a marker\'s number is the item\'s text.',
           },
         },
         required: ['itemId'],
@@ -1835,15 +1876,15 @@ function buildSequenceTools(editor) {
     {
       name: 'speech_setup',
       description:
-        'What this browser can currently do with speech: whether transcription and a voice are set up, which provider each uses, and where the audio would go. Call it before promising to transcribe or narrate — none of it is configured by default, and only the person at the keyboard can add a key.',
+        'What this browser can currently do with speech: whether transcription and a voice are set up, which provider each uses, and where the audio would go. Call it before promising to transcribe or narrate — none of it is configured by default, and only the person at the keyboard can add a key. In the UI this is the Speech tab in the left rail: its foot names the provider for each job, and its Providers… button is where one is set up when nothing is.',
       annotations: { readOnlyHint: true },
       inputSchema: { type: 'object', properties: {} },
       run: () => {
         const s = editor.speechStatus()
         const line = (what, d) =>
           !d.set
-            ? `${what}: not set up. Ask the person to open the microphone button in the header and choose one.`
-            : `${what}: ${d.label} — ${d.where}${d.ready ? '' : ` — not usable yet: ${d.why}`}`
+            ? `${what}: not set up. Ask the person to open the Speech tab in the left rail and press Providers…, or press Transcribe a clip… or Write a voice-over… there, which ask on their own.`
+            : `${what}: ${d.label} — ${d.where}${d.language ? ` — language ${d.language}` : ''}${d.ready ? '' : ` — not usable yet: ${d.why}`}`
         return (
           `${line('transcription', s.transcription)}\n${line('voice', s.voice)}` +
           (s.voice.set && !s.voice.canRecord
@@ -1859,7 +1900,7 @@ function buildSequenceTools(editor) {
     {
       name: 'transcribe_media',
       description:
-        'Write down what is said in a library file, using whatever transcription the person has set up, and add the words as a transcript. Comes back with word timings where the provider gives them, so the result can be placed as karaoke captions. Check speech_setup first.',
+        'Write down what is said in a library file, using whatever transcription the person has set up, and add the words as a transcript. Comes back with word timings where the provider gives them, so the result can be placed as karaoke captions. Check speech_setup first. The same job as the Transcribe button in the Speech rail, on a media tile with sound, and in a selected item\u2019s Sound section.',
       annotations: { readOnlyHint: false },
       inputSchema: {
         type: 'object',
@@ -1887,19 +1928,20 @@ function buildSequenceTools(editor) {
     {
       name: 'add_voice_over',
       description:
-        'Read a script aloud into an audio file and drop it on an audio track. Needs a voice that returns audio — the computer\u2019s own voices cannot be recorded. Check speech_setup first; use time_script to see how long a script runs before committing to it.',
+        'Read a script aloud into an audio file and drop it on an audio track. Needs a voice that returns audio — the computer\u2019s own voices cannot be recorded. Check speech_setup first; use time_script to see how long a script runs before committing to it. The same job as the Write a voice-over… button in the Speech rail, Voice-over… in a selected item\u2019s Sound section, and Voice-over from these lines… on a caption item.',
       annotations: { readOnlyHint: false },
       inputSchema: {
         type: 'object',
         properties: {
           text: { type: 'string', description: 'What should be said.' },
-          voice: { type: 'string', description: 'Voice id, if the provider has several.' },
+          voice: { type: 'string', description: 'Voice id from list_voices. Default: the one chosen in the panel.' },
+          language: { type: 'string', description: 'ISO code the script is in (es, en, pt…). Picks a voice of that language where each voice speaks one, or is sent with the script where voices are multilingual. Default: the language chosen in the panel, else auto.' },
           name: { type: 'string', description: 'A name for the audio file.' },
           atSeconds: seconds('Where on the timeline it starts. Defaults to the playhead.'),
         },
         required: ['text'],
       },
-      run: async ({ text, voice, name, atSeconds }) => {
+      run: async ({ text, voice, language, name, atSeconds }) => {
         const s = editor.speechStatus()
         if (!s.voice.set || !s.voice.ready) return notSetUp('a voice', s.voice)
         if (s.voice.leaves && !s.agentMayEgress) return egressRefused('This voice', s.voice)
@@ -1908,16 +1950,97 @@ function buildSequenceTools(editor) {
             `${s.voice.label}: a browser will not let a page record what it says, so it cannot become a file. ` +
             `time_script still works with it and costs nothing. ` +
             `To put narration in the video the person needs a voice that returns audio — ask them to open the ` +
-            `microphone button in the header and pick one under "Read text aloud".`
+            `Speech tab in the left rail, press Providers… and pick one under Voice-over.`
           )
         }
-        const m = await editor.addVoiceOver(text, { voice, name, atMs: atSeconds != null ? toMs(atSeconds) : null })
+        const m = await editor.addVoiceOver(text, { voice, name, language: language || null, atMs: atSeconds != null ? toMs(atSeconds) : null })
         // The id goes last and unpunctuated: a filename with a full stop welded
         // to its extension is a filename something will read one dot short.
         return (
           `Recorded "${m.name}" — ${fmtT(m.durationMs)}s — and placed it on an audio track. ` +
           `${s.voice.leaves ? `The script was sent to ${s.voice.host ?? s.voice.label}.` : 'It was made on your own machine; nothing left the computer.'}\n` +
           `sourceId: ${m.filename}`
+        )
+      },
+    },
+    {
+      name: 'list_voices',
+      description:
+        'The voices the chosen voice provider can speak with, grouped by language, each with the id to pass as voice to add_voice_over — and which voice and language the person has selected. With VoiceBox it also counts the built-in presets add_voice can save as profiles. Check speech_setup first.',
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: 'object',
+        properties: { language: { type: 'string', description: 'Only voices of this language, as an ISO code such as es or en.' } },
+      },
+      run: async ({ language }) => {
+        const v = editor.listVoices()
+        if (!v) return notSetUp('a voice', editor.speechStatus().voice)
+        const want = language ? baseLang(language) : null
+        const groups = groupVoices(v.voices, { first: want ?? v.language }).filter((g) => !want || g.lang === want || g.lang === 'und')
+        const head =
+          `${v.label}: ${v.voices.length} voice(s)` +
+          (v.language ? `, language set to ${languageName(v.language)} (${v.language})` : ', language: auto') +
+          (v.chosen ? `, selected: ${v.chosen}` : '') +
+          '.\n'
+        const lines = []
+        for (const g of groups) {
+          lines.push(`${g.label}:`)
+          for (const x of g.voices) {
+            lines.push(`  ${x.id}${x.name && x.name !== x.id ? `  ${x.name}` : ''}${x.gender ? `  ${x.gender}` : ''}${x.note ? `  ${x.note}` : ''}`)
+          }
+        }
+        // VoiceBox's presets are voices it does not have yet: worth a count, and
+        // the ids when one language was asked for, never the whole catalogue.
+        let tail = ''
+        if (v.id === 'voicebox') {
+          try {
+            const presets = await editor.listVoicePresets()
+            const by = groupVoices(presets, { first: want ?? v.language }).filter((g) => !want || g.lang === want)
+            const ids = want ? by.flatMap((g) => g.voices).slice(0, 10).map((x) => `${x.engine}/${x.id}`) : []
+            tail =
+              `\nVoiceBox presets not saved as profiles yet: ${presets.length} — ${by.map((g) => `${g.label} ${g.voices.length}`).join(', ')}. ` +
+              `add_voice with preset "<engine>/<id>" saves one${ids.length ? `: ${ids.join(', ')}` : '; ask with a language to see ids'}.`
+          } catch {
+            /* the presets are a nicety; the voices above are the answer */
+          }
+        }
+        if (!lines.length) {
+          return head + (want ? `No voices in ${languageName(want)}.` : 'No voices listed yet — the person can press "Refresh voices" in the panel.') + tail
+        }
+        return head + fitLines(lines, head.length + tail.length, 'ask for one language.') + tail
+      },
+    },
+    {
+      name: 'add_voice',
+      description:
+        'Give the chosen voice provider a new voice and select it. VoiceBox: one of its built-in presets ("kokoro/ef_dora", from list_voices) saved as a profile, or a clone of a recording in the library — fromSourceId plus referenceText, the words said in it (the recording\u2019s transcript is used when there is one). ElevenLabs: an instant clone of a recording, which sends the audio there. Returns the voice id for add_voice_over.',
+      annotations: { readOnlyHint: false },
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'What to call the voice.' },
+          preset: { type: 'string', description: 'VoiceBox only: "<engine>/<voice id>" from list_voices, e.g. "kokoro/em_alex".' },
+          fromSourceId: { type: 'string', description: 'A library recording with sound (filename from list_media) to clone.' },
+          referenceText: { type: 'string', description: 'What is said in that recording, for VoiceBox. Default: its transcript.' },
+          language: { type: 'string', description: 'ISO code of the voice\u2019s language, e.g. es. Default: the preset\u2019s, else the panel\u2019s choice.' },
+        },
+        required: ['name'],
+      },
+      run: async ({ name, preset, fromSourceId, referenceText, language }) => {
+        const s = editor.speechStatus()
+        if (!s.voice.set || !s.voice.ready) return notSetUp('a voice', s.voice)
+        if (s.voice.id !== 'voicebox' && s.voice.id !== 'elevenlabs') {
+          return `${s.voice.label} takes no new voices from here; its voices are what list_voices shows. VoiceBox and ElevenLabs can take one.`
+        }
+        if (preset && s.voice.id !== 'voicebox') return 'Presets are VoiceBox\u2019s; ElevenLabs takes a clone from a recording (fromSourceId).'
+        if (!preset && !fromSourceId) return 'Give a preset (VoiceBox) or a fromSourceId (a library recording) to clone.'
+        // A clone sends the recording to the provider; a preset sends nothing
+        // but a name. Only the first is a send an agent may not make on its own.
+        if (fromSourceId && s.voice.leaves && !s.agentMayEgress) return egressRefused('Cloning a voice', s.voice)
+        const v = await editor.addVoice({ name, preset, fromSourceId, referenceText, language })
+        return (
+          `Added voice "${v.name}" (${languageName(v.lang)}) and selected it — use voice "${v.id}" in add_voice_over. ` +
+          (fromSourceId ? (s.voice.leaves ? `The recording was sent to ${s.voice.host ?? s.voice.label}.` : 'The recording stayed on this machine.') : 'Nothing was sent anywhere.')
         )
       },
     },

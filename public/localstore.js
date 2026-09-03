@@ -22,6 +22,7 @@
  */
 
 import { finalizeTranscript, parseTranscript, replaceCuesInWindow, toSrt, toVtt } from '/subtitles.js'
+import { decodeDataUrl, INLINE_CAPS, isDataUrl, nameIncoming } from '/filetype.js'
 
 const DB_NAME = 'klipvia'
 const DB_VERSION = 1
@@ -677,25 +678,25 @@ const routes = [
    * fetches it directly, so it works for anything served with permissive
    * headers and fails with a reason for anything else — which is better than a
    * proxy that quietly makes every URL on the internet reachable from a page.
+   *
+   * A `data:` URL is the file itself: an agent that holds the bytes has no
+   * other way to hand them to a page, since a tool call is JSON. It is decoded
+   * here, capped, and sniffed before it is named — the same decision the
+   * server makes, from the same code.
    */
   ['POST', /^\/api\/media\/from-url$/, async (m, req) => {
     const { url, name } = await req.json().catch(() => ({}))
     if (!url) return json({ error: 'missing url' }, 400)
-    try {
-      const res = await originalFetch(url, { mode: 'cors', credentials: 'omit' })
-      if (!res.ok) return json({ error: `upstream ${res.status}` }, 502)
-      const blob = await res.blob()
-      const base = name || decodeURIComponent(new URL(url, location.href).pathname.split('/').pop() || 'clip.mp4')
-      const filename = safeName(base, await dbAll('mediaMeta'))
-      await writeFile('media', filename, blob)
-      const stored = (await readFile('media', filename)) ?? blob
-      const meta = await probeMedia(stored, filename, base)
-      await dbPut('mediaMeta', meta)
-      const { _peaks, ...clean } = meta
-      return json(clean, 201)
-    } catch (err) {
-      return json({ error: `could not fetch ${url}: ${err?.message ?? err}. In the browser build the file's host must allow cross-origin reads.` }, 502)
-    }
+    const arrived = await fetchIncoming('media', url, name, 'clip.mp4')
+    if (!arrived.ok) return json({ error: arrived.error }, arrived.status)
+    const { blob, base } = arrived
+    const filename = safeName(base, await dbAll('mediaMeta'))
+    await writeFile('media', filename, blob)
+    const stored = (await readFile('media', filename)) ?? blob
+    const meta = await probeMedia(stored, filename, base)
+    await dbPut('mediaMeta', meta)
+    const { _peaks, ...clean } = meta
+    return json(clean, 201)
   }],
 
   /* ------------------------------------------------------------- assets */
@@ -715,19 +716,14 @@ const routes = [
   ['POST', /^\/api\/assets\/from-url$/, async (m, req) => {
     const { url, name } = await req.json().catch(() => ({}))
     if (!url) return json({ error: 'missing url' }, 400)
-    try {
-      const res = await originalFetch(url, { mode: 'cors', credentials: 'omit' })
-      if (!res.ok) return json({ error: `upstream ${res.status}` }, 502)
-      const blob = await res.blob()
-      const base = name || decodeURIComponent(new URL(url, location.href).pathname.split('/').pop() || 'asset.png')
-      const filename = safeName(base, await dbAll('assetMeta'))
-      await writeFile('assets', filename, blob)
-      const meta = await probeAsset(blob, filename, base)
-      await dbPut('assetMeta', meta)
-      return json(meta, 201)
-    } catch (err) {
-      return json({ error: `could not fetch ${url}: ${err?.message ?? err}. In the browser build the file's host must allow cross-origin reads.` }, 502)
-    }
+    const arrived = await fetchIncoming('asset', url, name, 'asset.png')
+    if (!arrived.ok) return json({ error: arrived.error }, arrived.status)
+    const { blob, base } = arrived
+    const filename = safeName(base, await dbAll('assetMeta'))
+    await writeFile('assets', filename, blob)
+    const meta = await probeAsset(blob, filename, base)
+    await dbPut('assetMeta', meta)
+    return json(meta, 201)
   }],
 
   ['DELETE', /^\/api\/assets\/([^/]+)$/, async (m) => {
@@ -846,6 +842,40 @@ function safeName(name, existing) {
   const stem = dot > 0 ? clean.slice(0, dot) : clean
   const ext = dot > 0 ? clean.slice(dot) : ''
   return `${stem}-${Math.random().toString(36).slice(2, 8)}${ext}`
+}
+
+/**
+ * The bytes behind a URL an agent gave, as a Blob with the name they should
+ * be stored under — from a data: URL decoded here, or an http(s) one fetched
+ * by the page. Only the head of a fetched file is read for the sniff; the
+ * Blob itself stays wherever the browser put it.
+ */
+async function fetchIncoming(kind, url, name, fallback) {
+  if (isDataUrl(url)) {
+    const d = decodeDataUrl(url, { cap: INLINE_CAPS[kind], kind: kind === 'media' ? 'media file' : 'asset' })
+    if (!d.ok) return { ok: false, status: d.status, error: d.error }
+    const named = nameIncoming(kind, d.bytes, { name, mime: d.mime, strict: true })
+    if (!named.ok) return { ok: false, status: 415, error: named.error }
+    return { ok: true, blob: new Blob([d.bytes], { type: named.mime }), base: named.name }
+  }
+  try {
+    const res = await originalFetch(url, { mode: 'cors', credentials: 'omit' })
+    if (!res.ok) return { ok: false, status: 502, error: `upstream ${res.status}` }
+    const blob = await res.blob()
+    const head = new Uint8Array(await blob.slice(0, 4096).arrayBuffer())
+    const base = name || decodeURIComponent(new URL(url, location.href).pathname.split('/').pop() || fallback)
+    const named = nameIncoming(kind, head, { name: base, mime: res.headers.get('content-type') ?? blob.type })
+    if (!named.ok) return { ok: false, status: 415, error: named.error }
+    return { ok: true, blob: blob.type === named.mime ? blob : new Blob([blob], { type: named.mime }), base: named.name }
+  } catch (err) {
+    return {
+      ok: false,
+      status: 502,
+      error:
+        `could not fetch ${url}: ${err?.message ?? err}. This build has no server, so the page fetches it itself and ` +
+        `the file's host must allow cross-origin reads (CORS) — or, if you hold the bytes, pass them as a data: URL instead.`,
+    }
+  }
 }
 
 const MIME = {

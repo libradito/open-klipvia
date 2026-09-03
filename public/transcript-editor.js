@@ -14,6 +14,7 @@
  */
 
 import { setTip } from '/tooltip.js'
+import { icon, hydrateIcons } from '/icons.js'
 import { rewordCue } from '/sequence.js'
 
 const $ = (sel, root = document) => root.querySelector(sel)
@@ -55,7 +56,7 @@ export function initTranscriptEditor({ lib, status, onChanged, seekToSource, cur
       <div class="tre-tools">
         <input class="tre-search" type="search" placeholder="Search the words…" spellcheck="false" data-tip="Show only the lines containing this. Clear to see them all.">
         <label class="check tre-follow" data-tip="Keep the line under the playhead in view while the timeline plays."><input type="checkbox" checked> follow</label>
-        <label class="tre-link" data-tip="The media these times belong to. Linking lets ▶ and the playhead find the right moment.">linked to <select class="tre-media"></select></label>
+        <label class="tre-link" data-tip="The media these times belong to. Linking lets the play button and the playhead find the right moment.">linked to <select class="tre-media"></select></label>
       </div>
       <div class="tre-tools tre-bulk">
         <input class="tre-find" type="text" placeholder="find" spellcheck="false" data-tip="Text to find in every line (case-insensitive).">
@@ -65,13 +66,14 @@ export function initTranscriptEditor({ lib, status, onChanged, seekToSource, cur
         <input class="tre-shift" type="number" step="0.1" value="0" data-tip="Seconds to add to every line (negative moves earlier). For a transcript that is off by a constant."> s
         <button class="btn small tre-shift-go" data-tip="Shift every line and word by that much.">Shift all</button>
         <span class="tre-sep"></span>
-        <button class="btn small tre-add" data-tip="Add a two-second line at the playhead, where this transcript's media is on the timeline.">+ line at playhead</button>
+        <button class="btn small tre-add" data-tip="Add a two-second line at the playhead, where this transcript's media is on the timeline."><i data-icon="plus"></i>line at playhead</button>
         <button class="btn small ghost tre-undo" data-tip="Undo the last transcript edit. Transcript edits are outside ⌘Z." disabled>Undo</button>
       </div>
       <div class="tre-list" role="list"></div>
-      <div class="tre-foot">Enter commits a line and moves to the next · ⇧Enter makes a line break · times are source seconds · ▶ seeks the timeline · ⑂ splits at the caret · ⌄ merges with the next line</div>
+      <div class="tre-foot">Enter commits a line and moves to the next · ⇧Enter makes a line break · times are source seconds · <i data-icon="play" data-icon-size="10"></i> seeks the timeline · <i data-icon="split" data-icon-size="10"></i> splits at the caret · <i data-icon="merge" data-icon-size="10"></i> merges with the next line</div>
     `
     document.body.appendChild(dlg)
+    hydrateIcons(dlg)
     ui = {
       export: $('.tre-export', dlg),
       scope: $('.tre-scope', dlg),
@@ -264,17 +266,25 @@ export function initTranscriptEditor({ lib, status, onChanged, seekToSource, cur
     b.addEventListener('change', () => commitTime(index, { endMs: Math.round(fromShown(Number(b.value) * 1000)) }))
 
     const acts = h('div', 'tre-acts')
-    const play = h('button', 'tre-btn', '▶')
+    const play = h('button', 'tre-btn')
+    play.setAttribute('aria-label', 'Seek here')
+    play.append(icon('play', { size: 11 }))
     setTip(play, 'Seek the timeline to this line (where its media is placed).')
     play.onclick = () => seek(cue)
-    const split = h('button', 'tre-btn', '⑂')
+    const split = h('button', 'tre-btn')
+    split.setAttribute('aria-label', 'Split line')
+    split.append(icon('split', { size: 12 }))
     setTip(split, 'Split this line in two at the caret — or in the middle when the caret is elsewhere.')
     split.onclick = () => splitAt(index, document.activeElement === text ? text.selectionStart : null)
-    const merge = h('button', 'tre-btn', '⌄')
+    const merge = h('button', 'tre-btn')
+    merge.setAttribute('aria-label', 'Merge with the next line')
+    merge.append(icon('merge', { size: 12 }))
     setTip(merge, 'Join this line with the next one.')
     merge.disabled = index >= open.t.cues.length - 1
     merge.onclick = () => mergeWithNext(index)
-    const del = h('button', 'tre-btn tre-del', '×')
+    const del = h('button', 'tre-btn tre-del')
+    del.setAttribute('aria-label', 'Delete line')
+    del.append(icon('x', { size: 12 }))
     setTip(del, 'Delete this line.')
     del.onclick = () => remove(index)
     acts.append(play, split, merge, del)
@@ -325,7 +335,7 @@ export function initTranscriptEditor({ lib, status, onChanged, seekToSource, cur
     if (!cue) return
     const text = value.replace(/\s+\n/g, '\n').trim()
     if (!text) {
-      status('a line needs words — use × to delete it', 'error')
+      status('a line needs words — delete it with its delete button instead', 'error')
       renderRows()
       return
     }

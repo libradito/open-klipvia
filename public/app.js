@@ -2,6 +2,7 @@ import { createRasterizer } from '/rasterize.js'
 import { studioExport, quickExport, formatBytes } from '/export.js'
 import { SNIPPETS } from '/snippets.js'
 import { initWebMcp } from '/webmcp.js'
+import { INLINE_CAPS, looksLikeSvg } from '/filetype.js'
 import { initIntegrations } from '/integrations.js'
 import * as INTEGRATIONS from '/integrations.js'
 import * as SPEECH from '/speech.js'
@@ -22,6 +23,52 @@ import * as LOCAL from '/localstore.js'
 import { renderSequence, renderOverlayItem, describeRender } from '/seqrender.js'
 import * as SEQ from '/sequence.js'
 import { TEXT_PRESETS, textPreset, defaultTextStyle } from '/textpresets.js'
+import { icon, hydrateIcons } from '/icons.js'
+import { initSections, refreshSections } from '/sections.js'
+
+// The static markup carries <i data-icon> placeholders; draw them before
+// anything else runs. They are decorative, so nothing below depends on it.
+hydrateIcons()
+
+/**
+ * The folding sections of the inspector and the rails. What a section
+ * starts as depends on what is selected (a title opens Text, captions open
+ * Cues, everything opens Placement but captions); a choice, once made, is
+ * remembered across visits. The Timeline group is the exception: it folds
+ * itself away while something is selected and remembers only for the session.
+ */
+const INSPECTOR_SECTION_DEFAULTS = {
+  timeline: true, track: true, selection: true,
+  text: true, captions: true, image: true, audio: true, placement: true,
+  transform: false, arrange: false, keys: false, speed: false, dissolve: false, look: false, note: false,
+}
+const inspSections = initSections(document.querySelector('.inspector'), 'klipvia:inspector.sections', INSPECTOR_SECTION_DEFAULTS)
+const railSections = initSections(document.getElementById('textRail'), 'klipvia:rail.text', { titles: true, shapes: true })
+initSections(document.getElementById('speechRail'), 'klipvia:rail.speech', { transcripts: true, voiceovers: true })
+// Cue textareas size themselves to their words, which they cannot do while
+// their section is folded; measure them again the moment it opens.
+document.querySelector('.inspector').addEventListener('section-toggle', (e) => {
+  if (e.detail?.key !== 'captions' || !e.detail.open) return
+  for (const t of document.querySelectorAll('#cueList textarea')) {
+    t.style.height = 'auto'
+    if (t.scrollHeight) t.style.height = `${t.scrollHeight}px`
+  }
+})
+
+/** A transport button shows what pressing it does next: play when stopped, pause when running. */
+function setPlayIcon(btn, playing) {
+  btn.replaceChildren(icon(playing ? 'pause' : 'play', { size: 14 }))
+}
+
+/** A note with, when there is one, a warning line under it — drawn, not typed as a glyph. */
+function noteWith(el, text, warn) {
+  el.replaceChildren(text)
+  if (!warn) return
+  const w = document.createElement('span')
+  w.className = 'warn-line'
+  w.append(icon('alert-triangle', { size: 13 }), warn)
+  el.append(w)
+}
 
 const $ = (id) => document.getElementById(id)
 
@@ -292,7 +339,7 @@ async function remount() {
   if (!clip) return
 
   state.playing = false
-  $('btnPlay').textContent = '▶'
+  setPlayIcon($('btnPlay'), false)
   $('console').innerHTML = ''
 
   const wrap = $('stageWrap')
@@ -401,12 +448,12 @@ async function togglePlay() {
   if (state.playing) {
     stage.pause()
     state.playing = false
-    $('btnPlay').textContent = '▶'
+    setPlayIcon($('btnPlay'), false)
     return
   }
   if (stage.time >= clip.durationMs - 1) await remount()
   state.playing = true
-  $('btnPlay').textContent = '❚❚'
+  setPlayIcon($('btnPlay'), true)
   state.iframe.contentWindow.__stage.play()
 }
 
@@ -422,11 +469,11 @@ window.addEventListener('message', async (e) => {
     if ($('chkLoop').checked && state.playing && !state.exporting) {
       await remount()
       state.playing = true
-      $('btnPlay').textContent = '❚❚'
+      setPlayIcon($('btnPlay'), true)
       state.iframe.contentWindow.__stage.play()
     } else {
       state.playing = false
-      $('btnPlay').textContent = '▶'
+      setPlayIcon($('btnPlay'), false)
     }
   } else if (d.type === 'stage:error') {
     const el = document.createElement('div')
@@ -477,7 +524,8 @@ function renderClips() {
     if (state.project.clips.length > 1) {
       const del = document.createElement('button')
       del.className = 'cdel'
-      del.textContent = '×'
+      del.setAttribute('aria-label', `Delete ${clip.name}`)
+      del.append(icon('x', { size: 12 }))
       setTip(del, `Delete "${clip.name}" from this project.`)
       del.onclick = (ev) => {
         ev.stopPropagation()
@@ -802,7 +850,7 @@ $('timeline').addEventListener('pointerdown', async (e) => {
   if (state.playing) {
     stage?.pause()
     state.playing = false
-    $('btnPlay').textContent = '▶'
+    setPlayIcon($('btnPlay'), false)
   }
   const t = timeFromEvent(e)
   showBubble(t, e.clientX)
@@ -947,7 +995,7 @@ function toggleCode(force) {
   const panel = $('codePanel')
   const collapsed = force ?? !panel.classList.contains('collapsed')
   panel.classList.toggle('collapsed', collapsed)
-  $('btnCollapse').textContent = collapsed ? '▴' : '▾'
+  $('btnCollapse').replaceChildren(icon(collapsed ? 'chevron-up' : 'chevron-down', { size: 14 }))
   requestAnimationFrame(fitStage)
 }
 $('btnCollapse').onclick = () => toggleCode()
@@ -1268,6 +1316,7 @@ const editor = {
     })
   },
 
+  /** A public http(s) URL, or a data: URL when the caller holds the bytes. */
   async addAssetFromUrl(url, name) {
     const res = await fetch('/api/assets/from-url', {
       method: 'POST',
@@ -1276,6 +1325,41 @@ const editor = {
     })
     const body = await res.json()
     if (!res.ok) throw new Error(body.error ?? 'could not fetch that asset')
+    await state.assets?.refresh()
+    return body
+  },
+
+  /**
+   * An SVG an agent wrote, straight into the asset library.
+   *
+   * Text is the one form of file a JSON tool call carries whole, and SVG is
+   * the one text format the library stores — so this is the cheapest way an
+   * agent has to make a mark: no host, no base64, one call. Nothing in it is
+   * sanitised; it is a same-origin file, like one the person dropped in.
+   */
+  async addAssetText(name, content) {
+    const file = String(name ?? '').trim()
+    if (!/\.svg$/i.test(file)) {
+      throw new Error(
+        'name must end in .svg — the only text format the asset library stores. ' +
+          'For a png, jpg, webp, gif, avif or a font, use add_asset_from_url with a data: URL.',
+      )
+    }
+    const bytes = new TextEncoder().encode(String(content ?? ''))
+    if (!bytes.length) throw new Error('content is empty')
+    if (bytes.length > INLINE_CAPS.text) {
+      throw new Error(`content is ${(bytes.length / 1024 / 1024).toFixed(1)} MB; inline text is capped at ${INLINE_CAPS.text / 1024 / 1024} MB`)
+    }
+    if (!looksLikeSvg(bytes)) {
+      throw new Error('content does not look like an SVG document — it should start with <svg …> (an XML prolog, comments or a doctype may come first)')
+    }
+    const res = await fetch(`/api/assets?name=${encodeURIComponent(file)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'image/svg+xml' },
+      body: new Blob([bytes], { type: 'image/svg+xml' }),
+    })
+    const body = await res.json()
+    if (!res.ok) throw new Error(body.error ?? 'could not save that asset')
     await state.assets?.refresh()
     return body
   },
@@ -1783,6 +1867,7 @@ const editor = {
 
   listMedia: () => [...(state.lib?.media.values() ?? [])],
 
+  /** A public http(s) URL, or a data: URL when the caller holds the bytes. */
   async addMediaFromUrl(url, name) {
     const res = await fetch('/api/media/from-url', {
       method: 'POST',
@@ -1850,7 +1935,7 @@ const editor = {
     return insertSource({ kind, id: sourceId }, opts)
   },
 
-  listTextPresets: () => TEXT_PRESETS.map((p) => ({ id: p.id, name: p.name, note: p.note, kind: p.kind ?? 'text', fields: p.fields, defaultDurationMs: p.defaultDurationMs })),
+  listTextPresets: () => TEXT_PRESETS.map((p) => ({ id: p.id, name: p.name, note: p.note, kind: p.kind ?? 'text', fields: p.fields, controls: p.controls, labels: p.labels, defaultDurationMs: p.defaultDurationMs })),
 
   addText({ preset, text, subtext, atMs, durationMs, trackId, anchor, offsetX, offsetY, opacity, style, name } = {}) {
     return insertSource(
@@ -2169,7 +2254,7 @@ const editor = {
   seekSequence(ms) {
     editor.ensureSequenceMode()
     state.compositor.pause()
-    $('btnSeqPlay').textContent = '▶'
+    setPlayIcon($('btnSeqPlay'), false)
     state.compositor.seekTo(Math.max(0, ms))
     return state.compositor.time
   },
@@ -2179,7 +2264,7 @@ const editor = {
     if (!seq) throw new Error('no timeline is open')
     if (SEQ.sequenceDuration(seq) <= 0) throw new Error('the timeline is empty')
     editor.ensureSequenceMode()
-    $('btnSeqPlay').textContent = '▶'
+    setPlayIcon($('btnSeqPlay'), false)
     const canvas = await state.compositor.snapshot(ms ?? state.compositor.time)
     const blob = await new Promise((res, rej) =>
       canvas.toBlob((b) => (b ? res(b) : rej(new Error('canvas is empty'))), 'image/png'),
@@ -2249,7 +2334,7 @@ const editor = {
     const total = SEQ.sequenceDuration(seq)
     if (total <= 0) throw new Error('the timeline is empty')
     editor.ensureSequenceMode()
-    $('btnSeqPlay').textContent = '▶'
+    setPlayIcon($('btnSeqPlay'), false)
     const n = Math.max(2, Math.min(12, Math.round(count)))
     const end = Math.max(0, Math.min(total, toMs ?? total))
     const start = Math.max(0, Math.min(fromMs, end))
@@ -2422,6 +2507,9 @@ const editor = {
         ready: r.ok,
         why: r.why,
         canRecord: !!p.speak,
+        // The language chosen in the panel, so an agent can say what a
+        // narration will come out in before it asks for one.
+        language: conf.language ?? null,
       }
     }
     return {
@@ -2441,13 +2529,78 @@ const editor = {
     return transcribeFromUi(m)
   },
 
-  async addVoiceOver(text, { voice = null, name = null, atMs = null } = {}) {
+  async addVoiceOver(text, { voice = null, name = null, atMs = null, language = null } = {}) {
     editor.ensureSequenceMode()
-    const m = await INTEGRATIONS.generateVoice(text, { voice, name, local: state.local })
+    const m = await INTEGRATIONS.generateVoice(text, { voice, name, language, local: state.local })
     await state.lib.refresh()
     if (atMs != null) state.compositor?.seekTo(Math.max(0, atMs))
     insertFromUi({ kind: 'media', id: m.filename })
     return m
+  },
+
+  /**
+   * The voices the chosen voice provider has, as the panel lists them —
+   * loaded last time, or the provider's fixed set — each with its language.
+   */
+  listVoices() {
+    const s = INTEGRATIONS.load()
+    const p = s.tts ? SPEECH.ttsProvider(s.tts) : null
+    if (!p) return null
+    const conf = INTEGRATIONS.configFor(p.id)
+    return {
+      id: p.id,
+      label: p.label,
+      chosen: conf.voice ?? null,
+      language: conf.language ?? null,
+      languages: p.languages ?? [],
+      voices: INTEGRATIONS.voicesFor(p.id),
+    }
+  },
+
+  /** VoiceBox's built-in voices, before any of them is saved as a profile. */
+  listVoicePresets: () => SPEECH.listPresets(INTEGRATIONS.configFor('voicebox')),
+
+  /**
+   * A new voice for the chosen provider: one of VoiceBox's presets saved as a
+   * profile, or a clone of a recording in the library. The words said in the
+   * recording are what a clone is trained against; when nobody supplies them
+   * the transcript linked to that recording is used, which is usually there
+   * because the recording was transcribed first.
+   */
+  async addVoice({ preset = null, fromSourceId = null, name, language = null, referenceText = null } = {}) {
+    const s = INTEGRATIONS.load()
+    if (!name) throw new Error('name is required')
+    // The language, when nobody said: the preset's own, else the panel's.
+    // Sending null would make the provider file the voice as English.
+    const panelLang = INTEGRATIONS.configFor(s.tts ?? 'voicebox').language ?? null
+    if (preset) {
+      const [engine, voiceId] = String(preset).split('/')
+      if (!engine || !voiceId) throw new Error('preset is "<engine>/<voice id>", e.g. "kokoro/ef_dora" — see list_voices')
+      let lang = language
+      if (!lang) {
+        const presets = await SPEECH.listPresets(INTEGRATIONS.configFor('voicebox')).catch(() => [])
+        lang = presets.find((x) => x.engine === engine && x.id === voiceId)?.lang ?? null
+      }
+      return INTEGRATIONS.addPresetVoice({ engine, voiceId, name, language: lang ?? panelLang })
+    }
+    language = language ?? panelLang
+    if (!fromSourceId) throw new Error('give a preset or a fromSourceId')
+    const m = state.lib.media.get(fromSourceId)
+    if (!m) throw new Error(`no media "${fromSourceId}". Use list_media.`)
+    if (!m.hasAudio) throw new Error(`"${fromSourceId}" has no sound to clone from`)
+    if (s.tts === 'elevenlabs') return INTEGRATIONS.addVoice(fromSourceId, { name, language, local: state.local })
+    let text = referenceText
+    if (!text) {
+      const row = state.lib.transcriptList.find((t) => t.mediaFilename === fromSourceId)
+      const t = row ? await state.lib.loadTranscript(row.id) : null
+      text = t?.cues?.map((c) => c.text).join(' ').trim() || null
+    }
+    if (!text) {
+      throw new Error(
+        `VoiceBox needs the words said in "${fromSourceId}" — pass referenceText, or transcribe_media it first and the transcript is used.`,
+      )
+    }
+    return INTEGRATIONS.cloneVoice(fromSourceId, { name, language, referenceText: text, local: state.local })
   },
 
   timeScript: (text) => INTEGRATIONS.timeScript(text),
@@ -2802,11 +2955,13 @@ function renderFormats() {
 
 function updateFormatNote() {
   const f = state.formats.find((x) => x.id === $('expFormat').value)
-  $('formatNote').textContent =
-    (f?.note ?? '') +
-    (f?.alpha && !f.alphaVerified
-      ? `\n\n⚠ This ffmpeg build accepted the alpha pixel format for ${f.label} and then wrote an opaque file. Use a format marked · alpha instead.`
-      : '')
+  noteWith(
+    $('formatNote'),
+    f?.note ?? '',
+    f?.alpha && !f.alphaVerified
+      ? `This ffmpeg build accepted the alpha pixel format for ${f.label} and then wrote an opaque file. Use a format marked · alpha instead.`
+      : '',
+  )
   // ProRes 4444 is effectively fixed-rate; the CRF slider does nothing for it.
   const usesQuality = f && f.id !== 'mov'
   $('expQuality').disabled = !usesQuality
@@ -2885,10 +3040,9 @@ $('btnQuick').onclick = async () => {
     const target = clip.fps
     const warn =
       r.realFps < target * 0.9
-        ? `\n⚠ captured ${r.realFps.toFixed(1)} fps against a target of ${target} — use Studio export for exact timing.`
+        ? `captured ${r.realFps.toFixed(1)} fps against a target of ${target} — use Studio export for exact timing.`
         : ''
-    $('exportResult').textContent =
-      `${r.filename}\n${formatBytes(r.size)} · ${r.frames} frames · ${r.realFps.toFixed(1)} fps${warn}`
+    noteWith($('exportResult'), `${r.filename}\n${formatBytes(r.size)} · ${r.frames} frames · ${r.realFps.toFixed(1)} fps`, warn)
   } catch (err) {
     if (err.name !== 'AbortError') {
       $('exportResult').textContent = String(err.message ?? err)
@@ -2996,7 +3150,8 @@ async function renderProjects() {
     acts.className = 'pacts'
 
     const rename = document.createElement('button')
-    rename.textContent = '✎'
+    rename.setAttribute('aria-label', 'Rename project')
+    rename.append(icon('pencil', { size: 13 }))
     setTip(rename, 'Rename this project.')
     rename.onclick = (ev) => {
       ev.stopPropagation()
@@ -3034,7 +3189,8 @@ async function renderProjects() {
     }
 
     const dup = document.createElement('button')
-    dup.textContent = '⧉'
+    dup.setAttribute('aria-label', 'Duplicate project')
+    dup.append(icon('copy', { size: 13 }))
     setTip(dup, 'Make a copy of this project, with independent clips.')
     dup.onclick = async (ev) => {
       ev.stopPropagation()
@@ -3056,7 +3212,8 @@ async function renderProjects() {
 
     // Two-step delete rather than a blocking confirm dialog.
     const del = document.createElement('button')
-    del.textContent = '×'
+    del.setAttribute('aria-label', 'Delete project')
+    del.append(icon('x', { size: 13 }))
     del.className = 'danger'
     setTip(del, 'Delete this project. Click twice to confirm.')
     let armed = false
@@ -3070,7 +3227,7 @@ async function renderProjects() {
         setTimeout(() => {
           if (!armed) return
           armed = false
-          del.textContent = '×'
+          del.replaceChildren(icon('x', { size: 13 }))
           del.classList.remove('confirm')
           acts.classList.remove('armed')
         }, 3500)
@@ -3096,7 +3253,8 @@ async function renderProjects() {
     // project, its footage and its images inside it.
     if (state.local) {
       const save = document.createElement('button')
-      save.textContent = '⤓'
+      save.setAttribute('aria-label', 'Save project as a file')
+      save.append(icon('download', { size: 13 }))
       setTip(save, 'Save this project as a file — documents, footage and images in one zip.')
       save.onclick = async (e) => {
         e.stopPropagation()
@@ -3344,8 +3502,10 @@ async function init() {
     onInsert: (payload) => insertFromUi(payload),
     onStatus: (message, kind) => status(message, kind),
     onEdit: (id) => openTranscriptEditor(id),
-    // Straight to the job if it can be done, to the choice if it cannot.
-    onSetUpSpeech: () => (state.speech?.isReady('stt') ? state.speech.openTranscribe() : state.speech?.open('stt')),
+    // The Transcribe window explains itself when nothing is set up yet.
+    onTranscribe: (filename) => state.speech?.openTranscribe(filename),
+    speechLine: () => state.speech?.whereLine('stt') ?? null,
+    voiceOvers: () => INTEGRATIONS.voiceOvers(),
   })
   state.transcriptEditor = initTranscriptEditor({
     lib: state.lib,
@@ -3359,7 +3519,7 @@ async function init() {
       const hits = await editor.sourceToTimeline(id, srcMs)
       if (!hits.length) return false
       state.compositor.pause()
-      $('btnSeqPlay').textContent = '▶'
+      setPlayIcon($('btnSeqPlay'), false)
       state.compositor.seekTo(hits[0].tlMs)
       return true
     },
@@ -3378,7 +3538,8 @@ async function init() {
     state.lib.importFiles(e.target.files)
     e.target.value = ''
   }
-  $('btnVoiceOver').onclick = () => state.speech?.openVoiceOver()
+  $('btnTranscribeRail').onclick = () => state.speech?.openTranscribe()
+  $('btnVoiceOverRail').onclick = () => state.speech?.openVoiceOver()
   $('btnImportText').onclick = () => $('textInput').click()
   $('textInput').onchange = (e) => {
     state.lib.importFiles(e.target.files)
@@ -3414,7 +3575,7 @@ async function init() {
     status,
     isLocal: () => state.local,
     refreshLibrary: () => state.lib.refresh(),
-    insertMedia: (filename) => insertFromUi({ kind: 'media', id: filename }),
+    insertMedia: (filename, opts) => insertFromUi({ kind: 'media', id: filename }, opts),
     insertTranscript: (id) => insertFromUi({ kind: 'transcript', id }),
     mediaWithSound: () => [...(state.lib?.media?.values() ?? [])].filter((m) => m.hasAudio),
     mediaFor: (filename) => state.lib?.media?.get(filename) ?? null,
@@ -3654,7 +3815,7 @@ async function transcribeFromUi(media) {
     onProgress: (p) => p.label && status(p.label),
   })
   await state.lib.refresh()
-  setRail('text')
+  setRail('speech')
   status(`"${t.name}" — ${t.cueCount ?? t.cues?.length ?? 0} lines${t.wordLevel ? ', with word timings' : ''}`)
   return t
 }
@@ -3679,7 +3840,7 @@ function initAgentHint(mcp) {
     const ok = !!mcp?.ok
     el.classList.toggle('off', !ok)
     el.innerHTML = `
-      <h4><span class="dot"></span>${ok ? `An agent can drive this — ${mcp.count} tools` : 'No agent is attached yet'}</h4>
+      <h4><i data-icon="bot" data-icon-size="15"></i><span class="ttl">${ok ? `An agent can drive this — ${mcp.count} tools` : 'No agent is attached yet'}</span><span class="dot"></span></h4>
       <p>${
         ok
           ? 'Everything on this timeline was made here, in this browser. Open an agent in this tab and ask it for something:'
@@ -3690,6 +3851,7 @@ function initAgentHint(mcp) {
         <small>Click one to copy it.</small>
         <button class="btn small ghost" id="btnHintDone">Got it</button>
       </div>`
+    hydrateIcons(el)
 
     // The prompts go in as text, not markup: they are the one part of this
     // card anyone is likely to edit.
@@ -3771,7 +3933,7 @@ function setMode(mode) {
     // The clip stage keeps running otherwise, playing to nobody.
     state.iframe?.contentWindow?.__stage?.pause()
     state.playing = false
-    $('btnPlay').textContent = '▶'
+    setPlayIcon($('btnPlay'), false)
     setRail(state.rail === 'clips' && !state.railTouched ? 'timelines' : state.rail)
     // The stage was display:none while clip mode had the screen, which stops
     // the overlay documents rendering; rebuild them rather than trust them.
@@ -4100,7 +4262,9 @@ function renderTimelineRail() {
 
     const name = document.createElement('span')
     name.className = 'tl-name'
-    name.textContent = (t.id === mainId ? '★ ' : depth ? '⧉ ' : '') + t.name
+    if (t.id === mainId) name.append(icon('star-filled', { size: 12, cls: 'tl-mark' }))
+    else if (depth) name.append(icon('git-branch', { size: 12, cls: 'tl-mark' }))
+    name.append(t.name)
     el.appendChild(name)
 
     const meta = document.createElement('span')
@@ -4109,16 +4273,17 @@ function renderTimelineRail() {
     if (t.claimedBy?.agent) {
       const flag = document.createElement('span')
       flag.className = 'claim'
-      flag.textContent = ' ⚑'
+      flag.append(icon('flag', { size: 11 }))
       meta.appendChild(flag)
     }
     el.appendChild(meta)
 
     const actions = document.createElement('span')
     actions.className = 'tl-actions'
-    const mk = (label, tip, fn, disabled = false) => {
+    const mk = (name, label, tip, fn, disabled = false) => {
       const b = document.createElement('button')
-      b.textContent = label
+      b.setAttribute('aria-label', label)
+      b.append(icon(name, { size: 13 }))
       b.disabled = disabled
       setTip(b, tip)
       b.addEventListener('click', (e) => {
@@ -4130,14 +4295,14 @@ function renderTimelineRail() {
     if (block && parent) {
       const siblings = parent.tracks.find((tr) => tr.items.includes(block))?.items.filter((i) => i.type === 'timeline') ?? []
       const at = siblings.indexOf(block)
-      mk('▲', 'Play this section earlier: swap it with the one before.', () => swapBlocks(parent, siblings[at - 1], block), at <= 0)
-      mk('▼', 'Play this section later: swap it with the one after.', () => swapBlocks(parent, block, siblings[at + 1]), at >= siblings.length - 1)
+      mk('chevron-up', 'Move earlier', 'Play this section earlier: swap it with the one before.', () => swapBlocks(parent, siblings[at - 1], block), at <= 0)
+      mk('chevron-down', 'Move later', 'Play this section later: swap it with the one after.', () => swapBlocks(parent, block, siblings[at + 1]), at >= siblings.length - 1)
     }
-    mk('✎', 'Rename.', () => renameInline(name, t))
-    mk('⧉', 'Duplicate as a new version and open it. Sections stay shared; ⌥-click copies them too.', (e) =>
+    mk('pencil', 'Rename', 'Rename.', () => renameInline(name, t))
+    mk('copy', 'Duplicate', 'Duplicate as a new version and open it. Sections stay shared; ⌥-click copies them too.', (e) =>
       editor.duplicateSequence({ timelineId: t.id, deep: !!e?.altKey }).then((r) => status(`"${r.copy.name}" is a copy of "${r.source.name}"${r.copied > 1 ? ` with ${r.copied - 1} section(s) copied` : ''}`)),
     )
-    if (t.id !== mainId) mk('★', 'Make this the main timeline — the one the project delivers.', () => {
+    if (t.id !== mainId) mk('star', 'Make main timeline', 'Make this the main timeline — the one the project delivers.', () => {
       state.project.mainTimelineId = t.id
       dirty.project = true
       scheduleSave()
@@ -4168,7 +4333,7 @@ function renderTimelineRail() {
         const el = document.createElement('div')
         el.className = 'tl-row missing'
         el.style.paddingLeft = `${6 + (depth + 1) * 14}px`
-        el.textContent = `⧉ ${block.name} — missing`
+        el.append(icon('git-branch', { size: 12, cls: 'tl-mark' }), `${block.name} — missing`)
         list.appendChild(el)
         continue
       }
@@ -4313,7 +4478,8 @@ function renderCrumb() {
     const t = timelineById(id)
     const b = document.createElement('button')
     b.className = 'crumb' + (i === chain.length - 1 ? ' current' : '')
-    b.textContent = (id === state.project?.mainTimelineId ? '★ ' : '') + (t?.name ?? id)
+    if (id === state.project?.mainTimelineId) b.append(icon('star-filled', { size: 11, cls: 'tl-mark' }))
+    b.append(t?.name ?? id)
     if (i < chain.length - 1) {
       b.addEventListener('click', async () => {
         crumbs.splice(i)
@@ -4485,7 +4651,7 @@ function previewHealthTick() {
   healthWarnedAt = now
   status(
     `preview is struggling — ${p.fps} fps, ${p.seeks} audio seek(s), ${p.mounted} overlays live. ` +
-      'Hide the tracks you are not working on (◌ in the track header) or collapse the code panel; the render is unaffected.',
+      'Hide the tracks you are not working on (the eye in the track header) or collapse the code panel; the render is unaffected.',
     'error',
   )
 }
@@ -4697,6 +4863,8 @@ function focusItemFields(item) {
   }[item.type]
   const el = field && $(field)
   if (!el || el.closest('.hidden')) return
+  const section = el.closest('.insp-section')
+  if (section?.dataset.section) inspSections.setOpen(section.dataset.section, true)
   el.focus()
   el.select?.()
 }
@@ -5018,7 +5186,7 @@ function jumpToMarker(dir) {
   const next = dir > 0 ? list.find((m) => m.ms > now + 1) : [...list].reverse().find((m) => m.ms < now - 1)
   if (!next) return status(dir > 0 ? 'no marker after here' : 'no marker before here', 'error')
   state.compositor.pause()
-  $('btnSeqPlay').textContent = '▶'
+  setPlayIcon($('btnSeqPlay'), false)
   state.compositor.seekTo(next.ms)
   status(`${next.label || 'marker'} — ${fmtClock(next.ms)}`)
 }
@@ -5103,6 +5271,7 @@ function renderTrackInspector() {
   state.selectedTrack = live
   $('trackInspector').classList.toggle('hidden', !live)
   $('itemInspector').classList.toggle('hidden', !!live || multiSelected())
+  syncTimelineSection()
   if (!live) return
 
   $('trackName').value = live.name
@@ -5194,6 +5363,7 @@ function renderItemInspector() {
   settings.classList.toggle('hidden', !live)
   empty.classList.toggle('hidden', !!live)
   $('itemInspector').classList.toggle('hidden', multiSelected() || !!state.selectedTrack)
+  syncTimelineSection()
   if (!live) return
 
   const media = live.type === 'media' ? state.lib.media.get(live.sourceId) : null
@@ -5238,6 +5408,7 @@ function renderItemInspector() {
   $('dissolveOut').value = ((live.dissolveOutMs ?? 0) / 1000).toFixed(1)
 
   $('rowAudio').classList.toggle('hidden', !hasAudio)
+  renderItemSpeech(live, media)
   $('btnDetach').classList.toggle('hidden', !(hasAudio && hasPicture && found?.track?.kind === 'video'))
   $('itemVolume').value = String(live.volume ?? 1)
   $('itemVolumeVal').textContent = Math.round((live.volume ?? 1) * 100) + '%'
@@ -5257,8 +5428,10 @@ function renderItemInspector() {
     $('textFont').value = st.fontFamily
     $('textSize').value = String(st.fontSize)
     $('textWeight').value = String(st.weight)
-    $('textColor').value = st.color
-    $('textAccent').value = st.accent
+    // A colour input cannot hold "none" (a frame or ring with no fill): show black rather than warn.
+    const hex = (c, d) => (/^#[0-9a-f]{6}$/i.test(String(c ?? '')) ? c : d)
+    $('textColor').value = hex(st.color, '#000000')
+    $('textAccent').value = hex(st.accent, '#ffffff')
     $('textAlign').value = st.align
     $('textUpper').checked = !!st.uppercase
 
@@ -5266,13 +5439,14 @@ function renderItemInspector() {
     const shape = preset.kind === 'shape'
     $('rowShape').classList.toggle('hidden', !shape)
     for (const el of document.querySelectorAll('#rowText .text-only')) el.classList.toggle('hidden', shape)
+    $('textText').placeholder = (shape && preset.placeholder) || 'Type the title…'
     if (shape) {
       $('shapeW').value = String(st.width)
       $('shapeH').value = String(st.height)
       $('shapeRadius').value = String(st.radius ?? 0)
       $('shapeStroke').value = String(st.stroke ?? 0)
-      $('rowShapeDir').classList.toggle('hidden', preset.id !== 'shape-arrow')
       $('shapeDir').value = st.direction ?? 'right'
+      $('shapeDashed').checked = !!st.dashed
     }
   }
 
@@ -5311,6 +5485,132 @@ function renderItemInspector() {
   if (hasAudio) updateSilenceSummary()
   if (hasAudio || live.type === 'media') renderReplaceChoices(live)
   if (cap) renderCueEditor(live)
+  syncItemSections(live, { media, hasAudio })
+}
+
+/* ------------------------------------------------ the inspector's sections */
+
+/** Whether the Timeline group should be open when nobody has said otherwise. */
+const timelineSectionDefault = () => !(state.selectedItem || state.selectedTrack || multiSelected())
+
+/**
+ * The Timeline group gives way to whatever is selected and comes back when
+ * nothing is — unless the person opened or closed it themselves this session.
+ */
+function syncTimelineSection() {
+  if (inspSections.hasChoice('timeline')) return
+  inspSections.setOpen('timeline', timelineSectionDefault())
+}
+
+const ANCHOR_WORDS = {
+  center: '', top: 'top', bottom: 'bottom', left: 'left', right: 'right',
+  'top-left': 'top left', 'top-right': 'top right', 'bottom-left': 'bottom left', 'bottom-right': 'bottom right',
+}
+
+/**
+ * The two speech jobs, on the item they are about: Transcribe on footage
+ * with sound (or a recording), Voice-over landing at this item's start. A
+ * transcript already bound to the file is named under the row, with the one
+ * thing to do with it; the Transcribe button then reads as a repeat.
+ */
+function renderItemSpeech(live, media) {
+  const row = $('rowSpeechActs')
+  const note = $('itemTranscriptNote')
+  const speechable = live.type === 'media' && !!media?.hasAudio
+  row.classList.toggle('hidden', !speechable)
+  if (!speechable) {
+    note.classList.add('hidden')
+    return
+  }
+  const bound = (state.lib?.transcriptList ?? []).find((t) => t.mediaFilename === media.filename) ?? null
+  const tr = $('btnTranscribeItem')
+  tr.classList.toggle('ghost', !!bound)
+  tr.replaceChildren(icon('captions', { size: 13 }), document.createTextNode(bound ? 'Transcribe again' : 'Transcribe…'))
+  const line = state.speech?.whereLine('stt') ?? 'Nothing is set up to listen yet; the window will ask.'
+  setTip(tr, `${bound ? 'Listen to this clip again and write a new transcript.' : 'Write down what is said in this clip as a transcript you can place as captions.'}\n${line}`)
+  setTip($('btnVoiceOverItem'), `Write a script and have a voice read it. The audio lands on an audio track at this item's start (${(live.startMs / 1000).toFixed(2)}s).`)
+  note.classList.toggle('hidden', !bound)
+  if (!bound) return
+  const n = bound.cueCount ?? 0
+  note.replaceChildren(document.createTextNode(`Transcript: ${bound.name} · ${n} line${n === 1 ? '' : 's'} · `))
+  const place = Object.assign(document.createElement('button'), { className: 'link-btn', textContent: 'Place as captions' })
+  setTip(place, 'Drop the words on a track as captions, lined up with this item.')
+  place.onclick = () => insertFromUi({ kind: 'transcript', id: bound.id })
+  note.append(place)
+}
+
+/**
+ * After the rows have been shown, hidden and filled: the section heads say
+ * what kind of thing this is, carry a one-word summary of what is folded
+ * away, open by default where the item's own controls live, and a section
+ * with nothing visible in it disappears rather than offering an empty fold.
+ */
+function syncItemSections(live, { media = null, hasAudio = false } = {}) {
+  const txt = live.type === 'text'
+  const preset = txt ? (textPreset(live.sourceId) ?? TEXT_PRESETS[0]) : null
+  const shape = !!preset && preset.kind === 'shape'
+
+  // The Text section reads "Shape" for a shape, and its rows follow: each
+  // shape preset lists the controls that apply and what it calls them, so a
+  // ring shows Weight and no Corners, and a marker shows a Number.
+  inspSections.head('text', shape ? { title: 'Shape', icon: 'shapes' } : { title: 'Text', icon: 'type' })
+  const labels = (shape && preset.labels) || {}
+  for (const el of document.querySelectorAll('#rowText .lbl[data-shape]')) {
+    const want = shape ? (labels[el.dataset.field] ?? el.dataset.shape) : (el.dataset.text ?? el.dataset.shape)
+    if (el.textContent !== want) el.textContent = want
+  }
+  const controls = new Set(shape ? preset.controls ?? [] : [])
+  for (const el of document.querySelectorAll('#rowText [data-control]')) el.classList.toggle('hidden', shape && !controls.has(el.dataset.control))
+
+  // The chip in the header: what this item is.
+  const kind = {
+    text: shape ? ['shapes', 'Shape'] : ['type', 'Title'],
+    caption: ['captions', 'Captions'],
+    image: ['image', 'Image'],
+    media: media?.hasVideo ? ['film', 'Footage'] : ['audio-lines', 'Sound'],
+    animation: ['clapperboard', 'Animation clip'],
+    timeline: ['sections', 'Timeline block'],
+  }[live.type] ?? ['film', 'Item']
+  const chip = $('itemKind')
+  if (chip.dataset.kind !== kind[0] || chip.lastChild?.textContent !== kind[1]) {
+    chip.dataset.kind = kind[0]
+    chip.replaceChildren(icon(kind[0], { size: 13 }), Object.assign(document.createElement('span'), { textContent: kind[1] }))
+  }
+
+  // Summaries: only where they are one cheap read of the item.
+  inspSections.meta('text', preset ? preset.name : '')
+  const rot = Math.round(FX.rotationOf(live))
+  const crop = live.crop ?? {}
+  const cropped = ['top', 'right', 'bottom', 'left'].some((k) => (Number(crop[k]) || 0) > 0)
+  inspSections.meta('transform', [rot ? `${rot}°` : '', live.flipH || live.flipV ? 'mirrored' : '', cropped ? 'cropped' : ''].filter(Boolean).join(' · '))
+  const keyCount = Object.values(live.keys ?? {}).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0)
+  inspSections.meta('keys', keyCount ? `${keyCount} key${keyCount === 1 ? '' : 's'}` : '')
+  const dIn = (live.dissolveInMs ?? 0) / 1000
+  const dOut = (live.dissolveOutMs ?? 0) / 1000
+  inspSections.meta('dissolve', [dIn ? `${dIn.toFixed(1)}s in` : '', dOut ? `${dOut.toFixed(1)}s out` : ''].filter(Boolean).join(' · '))
+  const rate = SEQ.speedOf(live)
+  inspSections.meta('speed', rate !== 1 ? `${rate}×` : '')
+  const colour = { ...FX.COLOUR_NEUTRAL, ...(live.colour ?? {}) }
+  const lookTouched = Object.keys(FX.COLOUR_NEUTRAL).some((k) => Math.abs(colour[k] - FX.COLOUR_NEUTRAL[k]) > 1e-3)
+    || (FX.blendOf(live) ?? 'normal') !== 'normal' || FX.radiusOf(live) > 0 || (Number(live.shadow?.blur) || 0) > 0
+  inspSections.meta('look', lookTouched ? 'modified' : '')
+  const scalePct = Math.round(SEQ.scaleOf(live) * 100)
+  inspSections.meta('placement', [ANCHOR_WORDS[live.anchor ?? 'center'] ?? '', scalePct !== 100 && SEQ.scales(live) ? `${scalePct}%` : ''].filter(Boolean).join(' · '))
+  const vol = Math.round((live.volume ?? 1) * 100)
+  inspSections.meta('audio', live.muted ? 'muted' : vol !== 100 ? `${vol}%` : '')
+  const ist = live.imageStyle ?? {}
+  inspSections.meta('image', ist.width || ist.height ? `${ist.width ?? 'auto'}×${ist.height ?? 'auto'}` : '')
+  inspSections.meta('note', live.note?.trim() ? 'has a note' : '')
+
+  refreshSections(inspSections.root, {
+    defaults: {
+      ...INSPECTOR_SECTION_DEFAULTS,
+      timeline: timelineSectionDefault(),
+      placement: live.type !== 'caption',
+      audio: hasAudio,
+      note: !!live.note?.trim(),
+    },
+  })
 }
 
 /**
@@ -5332,7 +5632,7 @@ function renderKeyInspector(live, { placeable, hasPicture }) {
   const local = Math.round((state.compositor?.time ?? 0) - live.startMs)
   const inside = local >= 0 && local <= live.durationMs
   $('keysHint').textContent = inside
-    ? 'Put the playhead where you want a value, set it, then press ◆.'
+    ? 'Put the playhead where you want a value, set it, then press the diamond beside it.'
     : 'The playhead is outside this item — move it inside to add a key.'
 
   const frame = 1000 / (currentSequence()?.fps || 30)
@@ -5347,7 +5647,8 @@ function renderKeyInspector(live, { placeable, hasPicture }) {
     row.append(Object.assign(document.createElement('span'), { className: 'k-name', textContent: KEYS.KEY_LABELS[prop] }))
 
     const diamond = document.createElement('button')
-    diamond.textContent = '◆'
+    diamond.append(icon(here ? 'diamond-filled' : 'diamond', { size: 12 }))
+    diamond.setAttribute('aria-label', here ? 'Remove key' : 'Add key')
     diamond.className = here ? 'on' : ''
     diamond.disabled = !inside
     setTip(diamond, here
@@ -5427,7 +5728,7 @@ function initKeyInspector() {
     const to = dir > 0 ? times.find((t) => t > now + 1) : [...times].reverse().find((t) => t < now - 1)
     if (to == null) return status(dir > 0 ? 'no key after here' : 'no key before here', 'error')
     state.compositor.pause()
-    $('btnSeqPlay').textContent = '▶'
+    setPlayIcon($('btnSeqPlay'), false)
     state.compositor.seekTo(to)
   }
   $('btnKeyPrev').onclick = () => jump(-1)
@@ -5666,9 +5967,25 @@ function highlightCueRow(ms) {
   const idx = t.cues.findIndex((c) => now >= c.startMs && now < c.endMs)
   if (idx === cueRowNow) return // every frame otherwise walks hundreds of rows for nothing
   cueRowNow = idx
-  for (const row of $('cueList').children) {
-    row.classList.toggle('now', Number(row.dataset.index) === idx)
+  const list = $('cueList')
+  let nowRow = null
+  for (const row of list.children) {
+    const on = Number(row.dataset.index) === idx
+    row.classList.toggle('now', on)
+    if (on) nowRow = row
   }
+  if (nowRow) scrollCueRowIntoView(list, nowRow)
+}
+
+/**
+ * Bring the current cue into the list's own viewport — nearest edge, and only
+ * the list: scrollIntoView would also drag the inspector and the page along.
+ */
+function scrollCueRowIntoView(list, row) {
+  const top = row.offsetTop - list.offsetTop
+  const bottom = top + row.offsetHeight
+  if (top < list.scrollTop) list.scrollTop = top
+  else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight
 }
 
 /** Open the transcript editor, parked on whatever the playhead is over. */
@@ -5838,36 +6155,84 @@ function renderCueEditor(item) {
   cueRowNow = -1
   const t = state.lib.transcripts.get(item.sourceId)
   if (!t) {
-    list.textContent = 'loading…'
+    list.appendChild(Object.assign(document.createElement('div'), { className: 'cue-empty', textContent: 'loading…' }))
+    inspSections.meta('captions', '')
     return
   }
   const from = item.inMs
   const to = item.inMs + item.durationMs
   const now = SEQ.sourceTimeAt(item, state.compositor?.time ?? 0)
   let shown = 0
+  let first = Infinity
+  let last = -Infinity
+  let nowRow = null
   t.cues.forEach((cue, index) => {
     if (cue.endMs <= from || cue.startMs >= to) return
     shown++
+    first = Math.min(first, Math.max(from, cue.startMs))
+    last = Math.max(last, Math.min(to, cue.endMs))
+    const current = now >= cue.startMs && now < cue.endMs
     const row = document.createElement('div')
-    row.className = 'cue-row' + (now >= cue.startMs && now < cue.endMs ? ' now' : '')
+    row.className = 'cue-row' + (current ? ' now' : '')
     row.dataset.index = String(index)
+
+    // Line one: when — a chip of start → end, the "now" dot, and delete on hover.
+    const time = document.createElement('div')
+    time.className = 'cue-time'
+    const chip = document.createElement('span')
+    chip.className = 'cue-chip'
     const a = document.createElement('input')
     a.type = 'number'
     a.step = '0.05'
+    a.min = '0'
     a.value = (cue.startMs / 1000).toFixed(2)
     a.title = 'start, source seconds'
+    a.setAttribute('aria-label', 'Cue start, seconds')
+    const arrow = document.createElement('span')
+    arrow.className = 'arrow'
+    arrow.append(icon('arrow-right', { size: 12 }))
     const b = document.createElement('input')
     b.type = 'number'
     b.step = '0.05'
+    b.min = '0'
     b.value = (cue.endMs / 1000).toFixed(2)
     b.title = 'end, source seconds'
-    const text = document.createElement('input')
-    text.type = 'text'
+    b.setAttribute('aria-label', 'Cue end, seconds')
+    chip.append(a, arrow, b)
+    const dot = document.createElement('span')
+    dot.className = 'cue-now'
+    dot.title = 'The playhead is in this line'
+    const del = document.createElement('button')
+    del.type = 'button'
+    del.className = 'cue-del'
+    del.append(icon('x', { size: 12 }))
+    del.setAttribute('aria-label', 'Remove this cue')
+    del.title = 'Remove this cue'
+    time.append(chip, dot, del)
+
+    // Line two: the words, full width, growing to fit them. Enter commits
+    // (a cue's line breaks are the renderer's to decide, as before).
+    const text = document.createElement('textarea')
+    text.rows = 1
+    text.className = 'cue-text'
     text.value = cue.text.replace(/\n/g, ' ')
     text.spellcheck = true
-    const del = document.createElement('button')
-    del.textContent = '×'
-    del.title = 'Remove this cue'
+    text.setAttribute('aria-label', 'Cue text')
+    const grow = () => {
+      text.style.height = 'auto'
+      // Folded away, a textarea measures nothing; leave it to the section's
+      // unfold, which measures every cue again.
+      if (text.scrollHeight) text.style.height = `${text.scrollHeight}px`
+    }
+    text.addEventListener('input', grow)
+    text.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        text.blur()
+      }
+    })
+    queueMicrotask(grow)
+
     const commit = (patch) =>
       editor.setCue(item.sourceId, index, patch).catch((err) => status(err?.message ?? String(err), 'error'))
     a.addEventListener('change', () => commit({ startMs: Math.round(parseFloat(a.value) * 1000) }))
@@ -5875,10 +6240,13 @@ function renderCueEditor(item) {
     text.addEventListener('change', () => commit({ text: text.value }))
     del.onclick = () => commit({ delete: true })
     for (const el of [a, b, text]) el.addEventListener('keydown', (e) => e.stopPropagation())
-    row.append(a, b, text, del)
+    row.append(time, text)
     list.appendChild(row)
+    if (current) nowRow = row
   })
-  if (!shown) list.textContent = 'No cues in this item\'s range.'
+  if (!shown) list.appendChild(Object.assign(document.createElement('div'), { className: 'cue-empty', textContent: 'No cues in this item\'s range.' }))
+  inspSections.meta('captions', shown ? `${shown} cue${shown === 1 ? '' : 's'} · ${fmtClock(last - first)}` : 'no cues')
+  if (nowRow) scrollCueRowIntoView(list, nowRow)
   $('btnCueUndo').disabled = !(state.lib.transcriptHistory.get(item.sourceId)?.length)
 }
 
@@ -6038,7 +6406,7 @@ function initItemInspector() {
       refreshSequence()
     })
   const styleField = (id, key, parse = (v) => v, event = 'change') =>
-    textField(id, (item, v) => { item.textStyle = { ...(item.textStyle ?? {}), [key]: parse(v) } }, event)
+    textField(id, (item, v, c) => { item.textStyle = { ...(item.textStyle ?? {}), [key]: parse(v, c) } }, event)
 
   // Typing redraws the stage live without touching the history; the undo
   // step lands when the field commits.
@@ -6050,7 +6418,10 @@ function initItemInspector() {
   })
   textField('textText', (item, v) => {
     item.text = v
-    if (!item.nameEdited) item.name = v.trim().slice(0, 40) || (textPreset(item.sourceId)?.name ?? 'Text')
+    if (item.nameEdited) return
+    const p = textPreset(item.sourceId)
+    // A marker is "Marker 2" on the timeline, not "2".
+    item.name = p?.kind === 'shape' ? `${p.name} ${v.trim()}`.trim().slice(0, 40) : v.trim().slice(0, 40) || (p?.name ?? 'Text')
   })
   textField('textSub', (item, v) => { item.subtext = v })
   textField('textPreset', (item, v) => { if (textPreset(v)) item.sourceId = v })
@@ -6065,9 +6436,31 @@ function initItemInspector() {
   styleField('shapeRadius', 'radius', (v) => Math.max(0, Math.round(Number(v) || 0)))
   styleField('shapeStroke', 'stroke', (v) => Math.max(0, Math.round(Number(v) || 0)))
   styleField('shapeDir', 'direction')
+  styleField('shapeDashed', 'dashed', (_v, c) => !!c)
   textField('textUpper', (item, _v, c) => { item.textStyle = { ...(item.textStyle ?? {}), uppercase: !!c } })
   for (const id of ['textText', 'textSub', 'textFont']) $(id).addEventListener('keydown', (e) => e.stopPropagation())
   $('btnTextToClip').onclick = () => convertOverlayToClip(state.selectedItem)
+  $('btnTranscribeItem').onclick = () => {
+    const item = state.selectedItem
+    if (item?.type === 'media') state.speech?.openTranscribe(item.sourceId)
+  }
+  $('btnVoiceOverItem').onclick = () => {
+    const item = state.selectedItem
+    if (item) state.speech?.openVoiceOver('', { atMs: item.startMs })
+  }
+  // The lines inside this caption item's window, one per line, as the script.
+  $('btnVoiceOverFromCaptions').onclick = () => {
+    const item = state.selectedItem
+    if (item?.type !== 'caption') return
+    const t = state.lib.transcripts.get(item.sourceId)
+    const from = item.inMs
+    const to = item.inMs + item.durationMs
+    const lines = (t?.cues ?? [])
+      .filter((c) => !(c.endMs <= from || c.startMs >= to))
+      .map((c) => String(c.text ?? '').trim())
+      .filter(Boolean)
+    state.speech?.openVoiceOver(lines.join('\n'), { atMs: item.startMs, name: item.name })
+  }
   $('btnDetach').onclick = async () => {
     const item = state.selectedItem
     if (!item) return
@@ -6079,32 +6472,55 @@ function initItemInspector() {
     }
   }
 
-  // The title gallery in the Text rail.
+  // The title gallery in the Text rail: titles two across, each drawn the way
+  // its preset draws; shapes three across as a glyph over a name. What a
+  // preset does is the tooltip — the tile is the look, not the explanation.
   const grid = $('titleGrid')
+  const shapes = $('shapeGrid')
+  let titleCount = 0
+  let shapeCount = 0
   for (const p of TEXT_PRESETS) {
     const shape = p.kind === 'shape'
-    if (shape && !grid.querySelector('.title-head')) {
-      const h = document.createElement('div')
-      h.className = 'title-head'
-      h.textContent = 'Shapes'
-      setTip(h, 'Rectangles, rings, highlights and arrows. Size, colour and place them in the inspector.\nA rectangle in the footage\'s own colour hides a name or a detail.', { at: 'right' })
-      grid.appendChild(h)
-    }
     const tile = document.createElement('div')
     tile.className = `title-tile p-${p.id}${shape ? ' p-shape' : ''}`
     tile.draggable = true
-    tile.innerHTML = `<div class="tname"></div><div class="tnote"></div>`
-    tile.querySelector('.tname').textContent = p.name
-    tile.querySelector('.tnote').textContent = p.note
+    tile.setAttribute('role', 'button')
+    tile.tabIndex = 0
+    if (shape && p.glyph) {
+      // The glyph is the shape itself at 28×20 in currentColor; on hover it
+      // draws on or pops the way the real one does (styles.css .p-shape).
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      g.setAttribute('viewBox', '0 0 28 20')
+      g.setAttribute('class', `glyph ${p.glyphMotion ?? 'pop'}`)
+      g.setAttribute('aria-hidden', 'true')
+      g.innerHTML = p.glyph
+      tile.append(g)
+    }
+    tile.append(Object.assign(document.createElement('div'), { className: 'tname', textContent: p.name }))
+    const add = document.createElement('span')
+    add.className = 'tadd'
+    add.append(icon('plus', { size: 12 }))
+    tile.append(add)
     setTip(tile, `${p.name}\n${p.note}\n${(p.defaultDurationMs / 1000).toFixed(1)}s by default · click to add at the playhead, or drag onto a track`, { at: 'right' })
     const words = shape ? '' : p.fields.includes('subtext') && p.id === 'lower-third' ? 'Name' : p.name
     tile.onclick = () => insertFromUi({ kind: 'text', id: p.id, text: words })
+    tile.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        tile.click()
+      }
+    })
     tile.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('application/x-ah-source', JSON.stringify({ kind: 'text', id: p.id, text: words }))
       e.dataTransfer.effectAllowed = 'copy'
     })
-    grid.appendChild(tile)
+    ;(shape ? shapes : grid).appendChild(tile)
+    if (shape) shapeCount++
+    else titleCount++
   }
+  railSections.meta('titles', String(titleCount))
+  railSections.meta('shapes', String(shapeCount))
+  railSections.refresh()
 
   $('btnEditClip').onclick = () => {
     const item = state.selectedItem
@@ -6366,7 +6782,7 @@ async function runSequenceRender({ format, quality, overlayFormat, download, fro
   if (SEQ.sequenceDuration(seq) <= 0) throw new Error('nothing on the timeline to render')
 
   state.compositor?.pause()
-  $('btnSeqPlay').textContent = '▶'
+  setPlayIcon($('btnSeqPlay'), false)
   const controller = new AbortController()
   state.seqAbort = controller
   setSeqExporting(true)
@@ -6708,7 +7124,7 @@ function initSequenceMode() {
       }
     },
     onEnd: () => {
-      $('btnSeqPlay').textContent = '▶'
+      setPlayIcon($('btnSeqPlay'), false)
       state.stageTools?.suppress(false)
     },
     onPause: () => {
@@ -6775,7 +7191,7 @@ function initSequenceMode() {
     getContext: seqContext,
     onSeek: (ms) => {
       state.compositor.pause()
-      $('btnSeqPlay').textContent = '▶'
+      setPlayIcon($('btnSeqPlay'), false)
       state.compositor.seekTo(ms)
     },
     onSelect: (items) => selectItems(items),
@@ -6796,7 +7212,7 @@ function initSequenceMode() {
 
   $('btnSeqPlay').onclick = () => {
     state.compositor.toggle()
-    $('btnSeqPlay').textContent = state.compositor.playing ? '❚❚' : '▶'
+    setPlayIcon($('btnSeqPlay'), state.compositor.playing)
     state.stageTools?.suppress(state.compositor.playing)
   }
   $('btnZoomIn').onclick = () => state.timeline.zoom(1.5)
@@ -7041,9 +7457,12 @@ window.addEventListener('keydown', async (e) => {
   }
 
   if (e.key === ' ') {
+    // Space on a focused button activates the button, as it does everywhere
+    // else; only Space on nothing in particular plays and pauses.
+    if (e.target?.closest?.('button, [role="button"], summary, .title-tile, .rail-tab')) return
     e.preventDefault()
     state.compositor.toggle()
-    $('btnSeqPlay').textContent = state.compositor.playing ? '❚❚' : '▶'
+    setPlayIcon($('btnSeqPlay'), state.compositor.playing)
     state.stageTools?.suppress(state.compositor.playing)
   } else if (e.key === 'ArrowRight') {
     e.preventDefault()
@@ -7128,7 +7547,7 @@ function applyPanels() {
   const inspOn = drawerMode.matches ? body.classList.contains('insp-open') : panels.insp
   $('btnRailToggle').classList.toggle('on', railOn)
   $('btnInspToggle').classList.toggle('on', inspOn)
-  setTip($('btnRailToggle'), `${railOn ? 'Hide' : 'Show'} the left rail — timelines, clips, media, text and assets.`, { key: '[', at: 'bottom' })
+  setTip($('btnRailToggle'), `${railOn ? 'Hide' : 'Show'} the left rail: timelines, clips, media, speech, text and assets.`, { key: '[', at: 'bottom' })
   setTip($('btnInspToggle'), `${inspOn ? 'Hide' : 'Show'} the inspector on the right.`, { key: ']', at: 'bottom' })
   savePanels()
   afterLayout()
@@ -7251,6 +7670,9 @@ const copyText = (text, what = 'copied') =>
 function focusInspector(id) {
   if (drawerMode.matches) togglePanel('insp', true)
   else if (!panels.insp) togglePanel('insp', true)
+  // A field inside a folded section cannot take focus; unfold it first.
+  const section = $(id)?.closest('.insp-section')
+  if (section?.dataset.section) inspSections.setOpen(section.dataset.section, true)
   requestAnimationFrame(() => {
     const el = $(id)
     el?.focus()
@@ -7368,7 +7790,7 @@ function timelineMenu(info) {
     items.push({ label: 'Cross dissolve into the next item', hint: 'Overlap the two and fade between them; the next one moves to the track above.', run: () => { selectItem(item); crossDissolve() } })
     if (media?.hasVideo && media?.hasAudio && track?.kind === 'video') items.push({ label: 'Detach audio', hint: 'Sound onto its own track; the picture goes mute.', run: withStatus(() => editor.detachAudio(item.id)) })
     // The other place somebody wants the words: looking at the clip itself.
-    if (media?.hasAudio) items.push({ label: 'Write down what is said…', hint: 'Transcribe this file into an editable transcript you can place as captions.', run: () => state.speech?.openTranscribe(media.filename) })
+    if (media?.hasAudio) items.push({ label: 'Transcribe…', hint: 'Write down what is said in this file as a transcript you can edit and place as captions.', run: () => state.speech?.openTranscribe(media.filename) })
     if (hasSound || track?.kind === 'audio') items.push({ label: item.muted ? 'Unmute' : 'Mute', checked: !!item.muted, run: withStatus(() => editor.setItem(item.id, { muted: !item.muted })) })
     items.push(
       '-',
@@ -7542,8 +7964,8 @@ function mediaMenu(e, tile) {
   const items = [
     { label: 'Insert at playhead', run: () => insertFromUi({ kind: 'media', id: m.filename }) },
     m.hasAudio && {
-      label: 'Write down what is said…',
-      hint: 'Transcribe it into an editable transcript you can place as captions.',
+      label: 'Transcribe…',
+      hint: 'Write down what is said in it as a transcript you can edit and place as captions.',
       run: () => state.speech?.openTranscribe(m.filename),
     },
     m.hasVideo && { label: 'Extract frames, sprites, sub-clips…', run: () => { openExtractDialog(); $('exSource').value = m.filename } },
@@ -7605,6 +8027,7 @@ function initContextMenus() {
     on('.tl-row[data-id]', railTimelineMenu) ||
       on('.clip-item', clipMenu) ||
       on('.media-tile[data-media]', mediaMenu) ||
+      on('.tr-row[data-media]', mediaMenu) ||
       on('.tr-row[data-transcript]', transcriptMenu) ||
       on('.asset[data-asset]', assetMenu) ||
       on('#stageArea', stageMenu)

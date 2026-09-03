@@ -7,6 +7,7 @@
  */
 
 import { setTip } from '/tooltip.js'
+import { icon } from '/icons.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -165,7 +166,8 @@ export function initAssets({ insertAtCursor, insertInto, activePane, onChange, o
 
       const del = document.createElement('button')
       del.className = 'adel'
-      del.textContent = '×'
+      del.setAttribute('aria-label', `Delete ${a.name}`)
+      del.append(icon('x', { size: 12 }))
       setTip(del, `Delete ${a.name} from the library.`)
       del.onclick = async (ev) => {
         ev.stopPropagation()
@@ -178,7 +180,8 @@ export function initAssets({ insertAtCursor, insertInto, activePane, onChange, o
       // already know what the asset looks like.
       const ins = document.createElement('button')
       ins.className = 'ains'
-      ins.textContent = '+'
+      ins.setAttribute('aria-label', 'Insert')
+      ins.append(icon('plus', { size: 13 }))
       setTip(ins, `Insert into the ${activePane().toUpperCase()} pane at the caret.`)
       ins.onclick = (ev) => {
         ev.stopPropagation()

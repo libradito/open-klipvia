@@ -13,13 +13,15 @@
  *   items: an array of
  *     '-'                                  a separator
  *     { heading: 'Text' }                  a section label
- *     { label, run, key?, hint?, disabled?, checked?, danger?, confirm? }
+ *     { label, run, key?, hint?, icon?, disabled?, checked?, danger?, confirm? }
  *     { label, swatches: [...colors], value, run(color) }
  *
  *   `confirm` makes a dangerous item ask once: the first click relabels it and
  *   keeps the menu open, the second click runs it. A stray click deletes
  *   nothing, and there is no blocking browser dialog.
  */
+
+import { icon } from '/icons.js'
 
 let menu = null
 let onClose = null
@@ -66,6 +68,7 @@ function buttonFor(item) {
   if (item.disabled) b.disabled = true
   if (item.checked) b.classList.add('checked')
 
+  if (item.icon) b.appendChild(icon(item.icon, { size: 14, cls: 'cmenu-icon' }))
   const label = document.createElement('span')
   label.className = 'cmenu-label'
   label.textContent = item.label

@@ -127,10 +127,25 @@ SRT; nothing is downloaded. It seeds once. Delete it and it stays deleted;
 
 ## Transcription and voice
 
-Two jobs — writing down what is said in a clip, and reading a script aloud —
-behind the 🎙 button in the header. Nothing is configured to begin with and
-nothing insists on being; the panel opens on what already works with no setup
-at all.
+Two jobs with a name each, **Transcribe** and **Voice-over**, and one home:
+the **Speech** tab in the left rail. Its Transcripts group opens with
+*Transcribe a clip…* and lists every transcript (imported or written), its
+Voice-overs group opens with *Write a voice-over…* and lists every recording
+a voice has made, and its foot always says which provider does each job and
+where the sound goes (*Transcribe: VoiceBox · on your machine*), with
+**Providers…** to change that. The same two words appear on the things you
+would act on: a *Transcribe* button on every media tile with sound, *Transcribe…*
+and *Voice-over…* in a selected item's Sound section (the voice-over lands at
+that item's start), *Voice-over from these lines…* on a caption item, and
+*Transcribe…* on the right-click menus.
+
+Each job window opens with the sentence of what will happen and where the
+audio goes, *"Listens to talk.mp4 with VoiceBox (on your machine) and writes
+down what is said"*, and a **Where** / **Voice from** select that lists only
+the providers that are ready, with the privacy badge beside it and again
+beside the button that starts the send; *Set up another…* opens Providers and
+brings you back. Nothing is configured to begin with and nothing insists on
+being; the computer's own voices are offered first because they already work.
 
 Every row answers the same question first, and the lists are ordered by the
 answer:
@@ -138,59 +153,91 @@ answer:
 | | |
 |---|---|
 | **in this browser** | your computer's own voices. Free, offline, nothing sent. |
-| **on your machine** | a Whisper or voice server you run. |
+| **on your machine** | a Whisper or voice server you run, or VoiceBox. |
 | **sent to a provider** | a hosted API, with your key. |
 
-**Your computer's own voices** need no key, no download and no network — there
-are usually a couple of hundred of them. They can read a script aloud, and they
-can **time** one: `Voice-over… → How long is it?` speaks the script silently and
-returns the length and a timing for every word. What they cannot do is be
-recorded. `speechSynthesis` has no route to a MediaStream or an AudioBuffer in
-any browser, so a system voice can never put a byte into your video, and the UI
-says so rather than producing a silent file.
+Under each row, chips say which languages it speaks. Every voice carries its
+language, the pickers group voices by it, and a **Language** choice next to the
+voice picks a voice that speaks it where each voice speaks one (Deepgram,
+VoiceBox, Kokoro) or is sent along with the script where the voices are
+multilingual (ElevenLabs, OpenAI, Cartesia). The choice is remembered per
+provider and used by the Voice-over window and by agents alike.
 
-**A server you run** is one address. whisper.cpp, [Speaches][], LocalAI, LM
-Studio, [Kokoro-FastAPI][] and openedai-speech all speak OpenAI's two routes, so
-one setting covers all of them — and the audio goes to that machine and no
-further. Most ship with cross-origin requests off, which looks exactly like the
-server being down, so turn them on: Speaches `--allow-origins "*"`, LocalAI
-`LOCALAI_CORS=true`.
+**Your computer's own voices** need no key, no download and no network; there
+are usually a couple of hundred of them, in dozens of languages. They can read
+a script aloud, and they can **time** one: `Write a voice-over… → Time it`
+speaks the script silently and returns the length and a timing for every word.
+What they cannot do is be recorded. `speechSynthesis` has no route to a
+MediaStream or an AudioBuffer in any browser, so a system voice can never put a
+byte into your video, and the UI says so rather than producing a silent file.
+
+**A server you run** is one address. whisper.cpp, [Speaches][], LocalAI,
+[Kokoro-FastAPI][] (port 8880) and openedai-speech all speak OpenAI's two
+routes, so one setting covers all of them, and the audio goes to that machine
+and no further. Voices are read from `/v1/audio/voices` where the server has
+it (Kokoro names its voices by language: `ef_dora` is Spanish, `ff_siwis`
+French) and fall back to the standard six names otherwise.
 
 **VoiceBox** gets its own row, because it is not OpenAI-shaped. It is a
-Qwen3-TTS voice-cloning server you run yourself: the voice profiles you have
-saved in it — cloned or preset — appear in Klipvia's voice list by name, and
-the audio never leaves the machine. Three things about its API shape the
-adapter: generation is asynchronous and answers with an id before the audio
-exists, its status endpoint speaks Server-Sent Events rather than JSON (so
-`/history/{id}` is what gets polled), and a preset profile refuses any engine
-but its own — so the engine is read off the profile rather than guessed, which
-is otherwise a 400 on the first try. Cancelling tells VoiceBox to stop rather
-than walking away from work still running on your GPU. Its Whisper is offered
-too, with the caveat that it returns words and a length but no per-word times,
-so the lines are spread across the length by their own length: fine to read and
-edit, not frame-exact.
+voice-cloning server you run yourself: the profiles you have saved in it appear
+in the voice list by name and language, and the audio never leaves the machine.
+**Add a voice…** on its row lists VoiceBox's built-in Kokoro and Qwen voices
+grouped by language (59 of them, in nine languages) and saves one as a profile
+in a click, or clones a recording from your library, with the reference text
+pre-filled from that recording's transcript when there is one. Its Whisper is
+offered too, with the caveat that it returns words and a length but no per-word
+times, so the lines are spread across the length by their own length: fine to
+read and edit, not frame-exact.
 
-VoiceBox only answers pages it has been told about — but that is only your
-problem in the browser-only build. **With the Klipvia server running, nothing
-goes cross-origin at all:** the page asks its own origin, `/api/speech/relay`
-asks the model, and there is no request for anyone to refuse. That is also what
-makes OpenAI usable, since no browser may call it directly.
+**Hosted providers** are Groq, ElevenLabs, Deepgram, Cartesia, AssemblyAI and
+OpenAI. Deepgram Aura speaks English, Spanish, German, French, Dutch, Italian
+and Japanese (ninety voices, all listed with no key needed); ElevenLabs speaks
+29 languages with any of your voices, 74 with its v3 model; Cartesia Sonic 44;
+OpenAI 57. Scripts longer than a provider's limit are cut at sentence ends and
+the pieces joined, so a long narration is one request from your side.
 
-The relay will only reach a loopback or private address, or one of five named
-speech APIs, and carries only the headers a speech API reads — never cookies.
-"Any URL" would make it a request-forgery tool pointed at whatever else is on
-the network.
+### When a machine on your network will not answer
 
-In the browser-only build the page does the calling, so the other end has to
-allow it. VoiceBox allows `http://localhost:5173` out of the box, so serving
-Klipvia there needs no change to VoiceBox; otherwise add Klipvia's address to
-its allowed origins. The error names the exact address to add.
+A page can only call what will let it, and a browser will not say why it
+could not: a server that is off, a server that refuses this page's origin, and
+a Chrome permission somebody clicked *Block* on all fail identically. So
+**Test it** diagnoses rather than guesses. It probes the address without
+CORS (which tells running from not running), probes it with CORS (which tells
+allowed from refused), asks Chrome's Permissions API about local-network
+access where that applies, and shows three checks — *Reachable · Allows this
+page · Local network permission* — with one precise sentence and the exact
+commands that fix it, each with a copy button.
 
-**Hosted providers** are Groq, ElevenLabs, Deepgram and AssemblyAI. Not OpenAI:
-`api.openai.com` sends no `Access-Control-Allow-Origin`, so no web page may call
-it, whatever key you hold. It is listed, disabled, and says why — Groq runs the
-same Whisper model and does allow browser requests. Anything needing a proxy is
-refused when you choose it rather than failing later with a console error.
+VoiceBox only answers the origins it has been told about. `http://localhost:5173`
+is one of them out of the box, so serving Klipvia there (`PORT=5173 bun run
+dev`, or the static build) needs no change. From any other address, including
+a hosted Klipvia, VoiceBox has to be started with the page's origin in
+`VOICEBOX_CORS_ORIGINS`. That is an environment variable of the app, not a
+setting, and the panel shows the command for your system: on macOS quit
+Voicebox and run `open -a Voicebox --env VOICEBOX_CORS_ORIGINS=https://your-klipvia`
+(or `launchctl setenv …` once and relaunch from the Dock); on Windows `setx`
+then relaunch; on Linux and Docker export it or put it under `environment:`.
+Several origins are comma-separated. Speaches takes `ALLOW_ORIGINS`, LocalAI
+`LOCALAI_CORS=true LOCALAI_CORS_ALLOW_ORIGINS=…`, Kokoro-FastAPI allows every
+page as shipped, whisper.cpp too.
+
+From an https page, Chrome asks once before letting a site reach your own
+machine or network ("Apps on device" for 127.0.0.1, "Local network" for
+192.168.x). Blocking it makes every call fail the same silent way; the panel
+tells you where to allow it again (the site-information icon left of the
+address bar). Private addresses are requested with `targetAddressSpace`, so a
+LAN server on plain http works from an https page in Chrome.
+
+**With the Klipvia server running**, hosted APIs go through `/api/speech/relay`:
+the page asks its own origin, the server asks the provider, and there is no
+cross-origin request for anyone to refuse. A machine provider is relayed only
+when the page itself is served from a loopback address, that is when the
+server and the browser are the same computer; a Klipvia server on another
+machine would otherwise ask *its own* 127.0.0.1 for a VoiceBox that is on
+yours. The relay reaches only loopback and private addresses or one of the
+named speech APIs, and carries only the headers a speech API reads, never
+cookies. "Any URL" would make it a request-forgery tool pointed at whatever
+else is on the network.
 
 Whatever answers, the result is an ordinary transcript: editable line by line,
 exportable as SRT, and placeable as captions with karaoke highlighting wherever
@@ -198,7 +245,7 @@ the words carry their own timings. A voice-over is an ordinary audio file: it
 lands in the library with a waveform and drops onto an audio track.
 
 **Your keys stay here.** They live in `localStorage` under `klipvia:`, which is
-reachable from none of the stores `exportProjectFile` reads — so a key cannot
+reachable from none of the stores `exportProjectFile` reads, so a key cannot
 travel inside a project you send someone, by construction rather than by
 remembering to strip it. **Forget my keys** clears them on their own; **Erase
 everything** takes them with the rest.
@@ -206,20 +253,20 @@ everything** takes them with the rest.
 **The badge follows the address, not the row.** "A server you run" is a text
 box, and a text box takes any host. Point it at `collect.example.com` and the
 row says **sent to collect.example.com**, in amber, with a second line if the
-address is `http://` — the one claim in this feature that must never be wrong
+address is `http://`. The one claim in this feature that must never be wrong
 is computed from what you typed, not from which row you clicked.
 
 **The ledger.** Once anything has actually been sent, the panel stops promising
 and starts reporting: *"1 of 2 jobs went to api.groq.com."* Fifty entries,
-newest first — what, how big, to which host, and no content, because a privacy
+newest first: what, how big, to which host, and no content, because a privacy
 record that copies the private thing is a second copy of the private thing.
 
-Four tools go to agents: `speech_setup`, `transcribe_media`, `add_voice_over`
-and `time_script`. Three rules they cannot argue their way around:
+Six tools go to agents: `speech_setup`, `list_voices`, `transcribe_media`,
+`add_voice_over`, `add_voice` and `time_script`. Three rules they cannot argue their way around:
 
 - **No tool writes a credential.** A key belongs to the person at the keyboard,
   and a tool that could set one is a tool that could be talked into setting one.
-- **No tool changes where audio goes** — not the provider, not the endpoint.
+- **No tool changes where audio goes**, not the provider, not the endpoint.
   Transcript text is user-imported and flows into an agent's context; without
   this, "read me this clip's transcript" is an exfiltration primitive.
 - **Agent-initiated sending is off by default.** You choosing a provider is
@@ -227,8 +274,8 @@ and `time_script`. Three rules they cannot argue their way around:
   footage to one. With it off, agents run only what stays on the machine and
   say so. There is a checkbox, and it explains itself.
 
-Every result that moved audio names where it went — *"It ran on your own
-machine; nothing left the computer"* or *"The audio was sent to api.groq.com"* —
+Every result that moved audio names where it went, *"It ran on your own
+machine; nothing left the computer"* or *"The audio was sent to api.groq.com"*,
 because the destination is not a detail of the job, it is half of what the job
 was.
 
@@ -990,10 +1037,15 @@ GET    /api/media/:file             one record
 GET    /api/media/:file/poster      poster frame
 GET    /api/media/:file/peaks       waveform samples
 GET    /api/media/:file/frame?t=    one decoded frame at a source time, JPEG
-POST   /api/media/from-url          { url, name? } → pull a remote file in
+POST   /api/media/from-url          { url, name? } → pull a file in: http(s), or a data: URL (24 MB decoded)
 DELETE /api/media/:file
 GET    /media/:file                 serve, with ranges
 ```
+
+`from-url` takes a `data:` URL as well as an address, because that is the only
+way an agent holding the bytes can hand them over — and the bytes, not the
+name, decide what the file is: they are sniffed against the format list above
+before a filename is chosen, and anything else is refused.
 
 ---
 
@@ -1036,7 +1088,7 @@ start, so the timing is exact to the word.
 
 ### Fixing the words
 
-The **transcript editor** (✎ on a transcript in the Text rail, *Edit
+The **transcript editor** (✎ on a transcript in the Speech rail, *Edit
 transcript…* on right-click, or *Edit the whole transcript…* in a caption's
 inspector) opens every line of a transcript in a panel on the right that
 does not block the timeline — play, scrub and fix at the same time. Each line
@@ -1129,22 +1181,46 @@ and from then on it is yours to edit. Agents get the same: `list_text_presets`,
 
 ### Shapes
 
-Under the titles the Text rail holds five shapes — **Rectangle**, **Ellipse**,
-**Ring**, **Highlight**, **Arrow**. They are titles with no words: the same
-preset machinery, a clip exactly the shape's size, placed by the item's anchor
-and offsets, sized and coloured in the inspector (Width, Height, Corners,
-Outline; Colour is the fill, Accent the outline; an arrow has a direction).
+Under the titles the Text rail holds eleven shapes, grouped by the four jobs an
+overlay does in a tutorial: **hide** — Rectangle, Ellipse; **enclose** — Frame,
+Ring, Highlight; **point** — Line, Arrow, Pulse, Pointer; **count or confirm**
+— Marker, Check. They are titles with no words: the same preset machinery, a
+clip exactly the shape's size, placed by the item's anchor and offsets, sized
+and coloured in the inspector.
 
-The reason they exist is the account name in a screen recording. A rectangle
-in the title bar's own colour — read it from a saved frame — hides it in
-preview and render alike, with nothing to key, blur or re-encode. A highlight
-is drawn translucent and fades in and out; a ring or an arrow points at
-something; everything else is instant, because a cover that fades would show
-what it covers for a frame.
+| | What it is for |
+|---|---|
+| **Rectangle**, **Ellipse** | A solid patch. In the footage's own colour — read it from a saved frame — a rectangle hides an account name or a detail in preview and render alike, with nothing to key, blur or re-encode. It cuts in and out: a cover that faded would show what it covers for a frame. |
+| **Frame**, **Ring** | An outline that draws itself on around something, clockwise from the top-left corner or from 12 o'clock. |
+| **Highlight** | A translucent wash swiped over a line or a button, left to right. |
+| **Line**, **Arrow** | A rule with round ends that draws from one end to the other; the arrow adds an open chevron head. *Points* is the end it draws towards. |
+| **Marker** | A numbered dot for steps — 1, 2, 3 — that pops in. Its number is the item's text, the *Number* row. |
+| **Check** | A tick in a disc: the disc pops, then the tick draws. |
+| **Pulse** | A dot with rings that ripple outward, over and over. "Click here" in a screen recording. |
+| **Pointer** | A mouse pointer that lands and clicks once. Its tip is the item's centre, so anchor and offsets place the tip. |
+
+They share one drawing grammar, so they read as one set on any footage. One
+weight key (`stroke`) is the line everywhere, whatever the row is called for a
+shape — Outline on a patch, Weight on a frame, Ring on a marker; one corner key
+(`radius`: 0, 8, 12, or 999 for a pill or a circle); Colour is the fill and
+Accent the line — or the number, or the tick. Lines are white by default and
+carry one small shadow, so a light stroke stays legible over a light UI.
+Stroked shapes draw themselves on; marker shapes pop on the easing the titles
+use; patches cut. *Dashed* makes a frame, ring, line or arrow dashed — a dashed
+stroke cannot draw on, so it fades in instead.
+
+The inspector shows only the rows a shape uses (a ring has no Corners, a line
+no Fill), each named for that shape. Every shape is an HTML or inline-SVG clip
+against the clip clock, so it scrubs and renders frame-exactly like a title,
+and **Convert to animation clip** hands its code over when a preset is not
+enough.
 
 Agents place them with `add_shape` (`shape`, `width`, `height`, `fill`,
-`outline`, `corners`, `points`, `anchor`, `offsetX/Y`, timing) and adjust them
-with `set_item`; `list_text_presets` lists them alongside the titles.
+`outline`, `outlineWidth`, `corners`, `points`, `dashed`, `label`, `anchor`,
+`offsetX/Y`, timing) and adjust them with `set_item` (`textStyle` width,
+height, radius, stroke, color, accent, direction, dashed; `text` for a marker's
+number); `list_text_presets` lists them alongside the titles with the
+parameters each one takes.
 
 ---
 
@@ -1367,9 +1443,14 @@ instead.
 POST   /api/assets?name=<filename>   raw body → { filename, url, width, height }
 GET    /api/assets                   list
 DELETE /api/assets/:filename
-POST   /api/assets/from-url          { url, name? } → pull a remote file in
+POST   /api/assets/from-url          { url, name? } → pull a file in: http(s), or a data: URL (8 MB decoded)
 GET    /assets/:filename             serve
 ```
+
+An SVG an agent wrote goes in as its text: `add_asset_text` posts it to
+`POST /api/assets?name=logo.svg`, 2 MB at most, and gets the same record back.
+As with media, a `data:` URL is sniffed before it is named — a PNG called
+`.jpg` is stored as a PNG, and text called `.png` is refused.
 
 ### Images on the timeline
 
@@ -1403,11 +1484,19 @@ WebMCP is behind an origin trial. For local development:
 
 1. Open `chrome://flags/#enable-webmcp-testing`, set it to **Enabled**
 2. Relaunch Chrome
-3. Load the editor — the header pill should read **webmcp · 73 tools**
+3. Load the editor — the header pill should read **webmcp · 89 tools**
+
+The count is the honest one for the build you are on: **89 with the server, 84
+without**, because the five tools that are really ffmpeg are not registered
+where there is no ffmpeg to run them.
 
 The pill reads `webmcp off` when the flag is not on; everything else still works.
-To serve the editor from a real origin instead, register at the Chrome origin
-trials console and start with `WEBMCP_ORIGIN_TRIAL_TOKEN=… bun run dev`.
+To serve the editor from a real origin instead, register that origin at the
+Chrome origin trials console and set `WEBMCP_ORIGIN_TRIAL_TOKEN` — as an
+environment variable for `bun run dev` or the Docker builds, or as the
+`Origin-Trial` header in `render.yaml` / `public/_headers`. Then a visitor
+needs no flag at all. Origin trials do not cover `localhost`, so the flag stays
+the only local route.
 
 ### Tools
 
@@ -1423,7 +1512,8 @@ trials console and start with `WEBMCP_ORIGIN_TRIAL_TOKEN=… bun run dev`.
 | `list_assets` | ✓ | Images and fonts in the library, with URLs |
 | `open_project` | | Switch the editor to another project |
 | `create_project` | | Create, open and select a starter clip |
-| `add_asset_from_url` | | Pull a remote image or font into the library |
+| `add_asset_from_url` | | An image or font into the library — from a public URL, or a `data:` URL the agent holds (8 MB) |
+| `add_asset_text` | | An SVG the agent wrote, as text, into the library (2 MB) |
 | `create_clip` | | Add and select a clip |
 | `duplicate_clip` | | Copy a clip and select the copy |
 | `set_clip_code` | | Replace html / css / js wholesale |
@@ -1457,7 +1547,7 @@ does, so an agent's edits land in the same undo history as yours.
 | `nest_items` · `flatten_item` | | Group items into a sub-timeline and leave a block; put a block's items back |
 | `duplicate_timeline` · `delete_timeline` | | A new version of a timeline (sections shared, or copied with `deep`); remove a version |
 | `claim_timeline` | | Say who is working on a timeline; `release`, or `force` to take it over |
-| `add_media_from_url` | | Pull footage or audio into the library |
+| `add_media_from_url` | | Footage or audio into the library — from a public URL, or a `data:` URL the agent holds (24 MB) |
 | `add_to_timeline` | | Place media, a clip (as an alpha overlay), a transcript (as captions) or another timeline (as a section) |
 | `set_item` · `move_item` · `split_item` · `delete_item` | | The item edits — everything a stage drag writes (`anchor`, `offsetX/Y`, `scale`), the transform (`rotation`, `flipH`, `flipV`, `crop`), the look (`colour`, `blend`, `radius`, `shadow`), `speed`, and the picture fades |
 | `set_keyframe` · `list_keyframes` · `clear_keyframes` | | Make a value different at two moments: position, size, opacity |
@@ -1470,7 +1560,7 @@ does, so an agent's edits land in the same undo history as yours.
 | `remove_silence` | | Detect and cut the gaps, rippling everything into sync |
 | `add_track` · `set_track` | | Tracks: name, colour, **note**; `locked` protects one from ripple edits |
 | `list_text_presets` · `add_text` | | Animated titles from presets, typed in |
-| `add_shape` | | A rectangle, ellipse, ring, highlight or arrow — sized, coloured and placed; a cover for a name in the footage |
+| `add_shape` | | One of eleven shapes — rectangle, ellipse, frame, ring, highlight, line, arrow, marker, check, pulse, pointer — sized, coloured and placed; a cover for a name in the footage |
 | `move_track` | | Reorder a track: up, down, top, bottom, or a position — stacking order for overlays |
 | `export_captions` | | One SRT / VTT / TXT from caption items, timed as on the timeline |
 | `select_items` | | Select on the timeline, as shift-click would |
@@ -1480,6 +1570,9 @@ does, so an agent's edits land in the same undo history as yours.
 | `save_frame` | | The footage frame under the playhead, or the composite, into Assets — with a `name` you can find again |
 | `extract_frames` · `extract_sprite` · `extract_subclip` | | Frame series and sprite sheets into Assets; frame-accurate cuts into Media |
 | `seek_timeline` · `render_timeline` | | |
+| `speech_setup` · `list_voices` | ✓ | What speech is set up and where audio would go; the voices it can use, grouped by language, with the language chosen |
+| `transcribe_media` · `add_voice_over` · `time_script` | · · ✓ | Words from a file; a script read into an audio file (with a `language`) and placed; how long a script runs, free |
+| `add_voice` | | A new voice: one of VoiceBox's built-in presets saved as a profile, or a clone of a library recording (VoiceBox, or ElevenLabs when agent sending is on) |
 | `undo_edit` · `redo_edit` | | The same history as `⌘Z`, one per timeline |
 
 Every timeline tool takes an optional `timelineId` (from `list_timelines`) and
@@ -1489,6 +1582,34 @@ a track the editor makes for an overlay follows the naming of the one on top
 ("Animaciones 2", not "V4"). An argument a tool does not know is refused with
 the nearest real name — `durationMs (did you mean durationSeconds?)` — rather
 than ignored.
+
+### Bringing files in
+
+A tool call is JSON on both sides. A `Blob` in an argument arrives as `{}`, and
+`execute()` runs without user activation, so a tool cannot open a file picker
+either: the person can drop an hour of footage on the editor, an agent cannot.
+So there are two ways for an agent to bring a file in, in the order to try
+them:
+
+1. **A public URL.** `add_media_from_url` / `add_asset_from_url` fetch it. With
+   the server, the server fetches; in the browser-only build the page fetches,
+   so the host must allow cross-origin reads — and the error says so.
+2. **A `data:` URL**, when the agent holds the bytes itself — a logo it drew, a
+   voice-over a tool handed back. The same two tools take one, base64 or
+   percent-encoded, decoded and sniffed on arrival: 8 MB for an asset, 24 MB
+   for media, said in the tool description and in the refusal. An SVG needs
+   no encoding at all: `add_asset_text` takes it as text. The caps are low on
+   purpose — the whole file rides inside one JSON argument and is held whole.
+
+The from-url routes fetch on the agent's say-so, which is the definition of a
+request-forgery risk, so the server checks every address before fetching it
+and again at each redirect. Loopback and the LAN are *allowed* there — this
+server runs on one person's machine, and their NAS is the most ordinary place
+footage lives — but link-local and the cloud metadata addresses never are,
+and neither is any scheme but http(s). The rasterizer's `/api/asset` proxy
+keeps its stricter rule and refuses the local network entirely: it exists to
+reach fonts on the internet, and a page that can read the LAN through it has
+been handed a scanner.
 
 ### What building with the tools taught them
 
@@ -1594,8 +1715,9 @@ So clip code is not sandboxed from the app.
 What is done about it, following Chrome's tool security guide: every write tool
 is marked `readOnlyHint: false` so agents confirm before acting; tools returning
 clip code or clip error text are marked `untrustedContentHint: true`; no tool
-exposes a path outside `data/exports`; and `exposedTo` is left unset, so tools
-are same-origin only and are not shared with other sites.
+exposes a path outside `data/exports`; and
+`exposedTo` is left unset, so tools are same-origin only and are not shared
+with other sites.
 
 ### Not included
 

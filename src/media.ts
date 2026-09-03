@@ -671,6 +671,30 @@ export function spriteCss(asset: Asset): string {
   ].join('\n')
 }
 
+/** A file that is already where the library keeps files: probe it and write its record, or remove it. */
+async function adoptMediaFile(
+  dest: string,
+  filename: string,
+  originalName: string,
+  failure: string,
+): Promise<{ ok: true; media: MediaItem } | { ok: false; error: string }> {
+  const st = await stat(dest)
+  const record = await buildRecord(filename, st.size, Date.now())
+  if (!record || record.durationMs <= 0) {
+    await unlink(dest).catch(() => {})
+    return { ok: false, error: failure }
+  }
+  record.name = basename(originalName)
+  await mkdir(MEDIA_META_DIR, { recursive: true })
+  await Bun.write(join(MEDIA_META_DIR, `${filename}.json`), JSON.stringify(record, null, 2))
+  return { ok: true, media: record }
+}
+
+function freshFilename(originalName: string) {
+  const id = Math.random().toString(36).slice(2, 8)
+  return `${slug(originalName)}-${id}${extname(originalName).toLowerCase()}`
+}
+
 /** Move a finished file into the library and probe it, without a second copy. */
 export async function importMediaPath(
   path: string,
@@ -679,19 +703,10 @@ export async function importMediaPath(
   const info = mediaMimeFor(originalName)
   if (!info) return { ok: false, error: `unsupported media type "${extname(originalName)}"` }
   await mkdir(MEDIA_DIR, { recursive: true })
-  const id = Math.random().toString(36).slice(2, 8)
-  const filename = `${slug(originalName)}-${id}${extname(originalName).toLowerCase()}`
+  const filename = freshFilename(originalName)
   const dest = join(MEDIA_DIR, filename)
   await rename(path, dest)
-  const st = await stat(dest)
-  const record = await buildRecord(filename, st.size, Date.now())
-  if (!record || record.durationMs <= 0) {
-    await unlink(dest).catch(() => {})
-    return { ok: false, error: 'the cut produced nothing playable' }
-  }
-  record.name = basename(originalName)
-  await Bun.write(join(MEDIA_META_DIR, `${filename}.json`), JSON.stringify(record, null, 2))
-  return { ok: true, media: record }
+  return adoptMediaFile(dest, filename, originalName, 'the cut produced nothing playable')
 }
 
 /**

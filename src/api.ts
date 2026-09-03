@@ -3,7 +3,9 @@ import type { Context } from 'hono'
 import { join } from 'node:path'
 import { mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import { EncodeJob, FORMATS, probeAlphaSupport, probeFfmpeg } from './ffmpeg'
-import { deleteAsset, listAssets, MAX_ASSET_BYTES, saveAsset } from './assets'
+import { deleteAsset, listAssets, MAX_ASSET_BYTES, mimeFor, saveAsset } from './assets'
+import { checkOutbound, fetchGuarded } from './outbound'
+import { decodeDataUrl, INLINE_CAPS, isDataUrl, nameIncoming } from '../public/filetype.js'
 import {
   deleteMedia,
   EXTRACT_LIMITS,
@@ -17,6 +19,7 @@ import {
   MAX_MEDIA_BYTES,
   MEDIA_DIR,
   MEDIA_META_DIR,
+  mediaMimeFor,
   readDetailPeaks,
   readPeaks,
   safeMediaName,
@@ -232,35 +235,25 @@ api.get('/asset', async (c) => {
   } catch {
     return c.json({ error: 'invalid url' }, 400)
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return c.json({ error: 'only http(s) urls are allowed' }, 400)
-  }
-  // Minimal SSRF guard: this server is meant to be bound to localhost, but do
-  // not let it be used as a relay into the local network.
-  const host = url.hostname.toLowerCase()
-  const blocked =
-    host === 'localhost' ||
-    host === '0.0.0.0' ||
-    host.endsWith('.local') ||
-    /^127\./.test(host) ||
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    host === '::1' ||
-    host === '[::1]'
-  if (blocked) return c.json({ error: 'blocked host' }, 403)
+  // SSRF guard: this server is meant to be bound to localhost, but do not let
+  // it be used as a relay into the local network. Every redirect hop is
+  // checked too — see outbound.ts.
+  const refused = await checkOutbound(url, { allowLocal: false })
+  if (refused) return c.json({ error: refused }, refused.startsWith('blocked') ? 403 : 400)
 
   try {
-    const res = await fetch(url, {
+    const g = await fetchGuarded(url, {
+      allowLocal: false,
+      timeoutMs: 15_000,
       headers: {
         // Google Fonts serves woff2 only to browser-like UAs.
         'user-agent':
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
         accept: '*/*',
       },
-      signal: AbortSignal.timeout(15_000),
     })
+    if (!g.ok) return c.json({ error: g.error }, g.status)
+    const res = g.res
     if (!res.ok) return c.json({ error: `upstream ${res.status}` }, 502)
 
     const mime = (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0]!.trim()
@@ -269,13 +262,13 @@ api.get('/asset', async (c) => {
     // CSS comes back as text so the client can rewrite the url() references
     // inside it; everything else becomes a data URI.
     if (mime.includes('css') || mime.startsWith('text/')) {
-      return c.json({ kind: 'text', mime, text: buf.toString('utf8'), finalUrl: res.url })
+      return c.json({ kind: 'text', mime, text: buf.toString('utf8'), finalUrl: g.url.href })
     }
     return c.json({
       kind: 'data',
       mime,
       dataUri: `data:${mime};base64,${buf.toString('base64')}`,
-      finalUrl: res.url,
+      finalUrl: g.url.href,
     })
   } catch (err) {
     return c.json({ error: String((err as Error).message ?? err) }, 502)
@@ -589,27 +582,43 @@ api.delete('/assets/:filename', async (c) => {
   return ok ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404)
 })
 
-/** Pull a remote image into the library — the path an agent can use. */
+/**
+ * Pull an image or font into the library from a URL — the path an agent uses.
+ *
+ * Two kinds of URL. An http(s) one is fetched here, through the outbound
+ * guard, with loopback and the LAN allowed: this server runs on one person's
+ * machine and their NAS is a legitimate source. A `data:` one is the file
+ * itself, base64 in the argument — the only way an agent can hand over bytes
+ * it holds, since a tool call is JSON — decoded here and capped well below
+ * the upload limit, because it arrives inside a JSON body and is held whole.
+ * Either way the bytes are sniffed before a name is chosen: the libraries
+ * store by extension, and a name is the one thing an agent can get wrong.
+ */
 api.post('/assets/from-url', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { url?: string; name?: string }
   if (!body.url) return c.json({ error: 'missing url' }, 400)
 
-  let url: URL
-  try {
-    url = new URL(body.url)
-  } catch {
-    return c.json({ error: 'invalid url' }, 400)
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return c.json({ error: 'only http(s) urls are allowed' }, 400)
+  if (isDataUrl(body.url)) {
+    const d = decodeDataUrl(body.url, { cap: INLINE_CAPS.asset, kind: 'asset' })
+    if (!d.ok) return c.json({ error: d.error }, d.status)
+    const named = nameIncoming('asset', d.bytes, { name: body.name, mime: d.mime, strict: true })
+    if (!named.ok) return c.json({ error: named.error }, 415)
+    const result = await saveAsset(named.name, d.bytes)
+    return result.ok ? c.json(result.asset, 201) : c.json({ error: result.error }, 400)
   }
 
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(20_000) })
-    if (!res.ok) return c.json({ error: `upstream ${res.status}` }, 502)
-    const buf = new Uint8Array(await res.arrayBuffer())
-    const fallback = decodeURIComponent(url.pathname.split('/').pop() || 'asset')
-    const result = await saveAsset(body.name || fallback, buf)
+    const g = await fetchGuarded(body.url, { allowLocal: true, timeoutMs: 20_000 })
+    if (!g.ok) return c.json({ error: g.error }, g.status)
+    if (!g.res.ok) return c.json({ error: `upstream ${g.res.status}` }, 502)
+    const buf = new Uint8Array(await g.res.arrayBuffer())
+    if (buf.byteLength > MAX_ASSET_BYTES) {
+      return c.json({ error: `file is larger than ${MAX_ASSET_BYTES / 1024 / 1024}MB` }, 413)
+    }
+    const fallback = decodeURIComponent(g.url.pathname.split('/').pop() || 'asset')
+    const named = nameIncoming('asset', buf, { name: body.name || fallback, mime: g.res.headers.get('content-type') ?? '' })
+    if (!named.ok) return c.json({ error: named.error }, 415)
+    const result = await saveAsset(named.name, buf)
     return result.ok ? c.json(result.asset, 201) : c.json({ error: result.error }, 400)
   } catch (err) {
     return c.json({ error: String((err as Error).message ?? err) }, 502)
@@ -652,31 +661,33 @@ api.delete('/media/:filename', async (c) => {
   return ok ? c.json({ ok: true }) : c.json({ error: 'not found' }, 404)
 })
 
-/** Pull remote footage or audio into the library — the path an agent can use. */
+/** Pull footage or audio into the library from a URL — http(s) or data:, as for assets. */
 api.post('/media/from-url', async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { url?: string; name?: string }
   if (!body.url) return c.json({ error: 'missing url' }, 400)
 
-  let url: URL
-  try {
-    url = new URL(body.url)
-  } catch {
-    return c.json({ error: 'invalid url' }, 400)
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return c.json({ error: 'only http(s) urls are allowed' }, 400)
-  }
-
   const ff = await probeFfmpeg()
   if (!ff.ok) return c.json({ error: 'ffmpeg/ffprobe were not found on PATH' }, 500)
 
+  if (isDataUrl(body.url)) {
+    const d = decodeDataUrl(body.url, { cap: INLINE_CAPS.media, kind: 'media file' })
+    if (!d.ok) return c.json({ error: d.error }, d.status)
+    const named = nameIncoming('media', d.bytes, { name: body.name, mime: d.mime, strict: true })
+    if (!named.ok) return c.json({ error: named.error }, 415)
+    const result = await saveMedia(named.name, d.bytes)
+    return result.ok ? c.json(result.media, 201) : c.json({ error: result.error }, 400)
+  }
+
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(120_000) })
-    if (!res.ok) return c.json({ error: `upstream ${res.status}` }, 502)
-    const buf = new Uint8Array(await res.arrayBuffer())
+    const g = await fetchGuarded(body.url, { allowLocal: true, timeoutMs: 120_000 })
+    if (!g.ok) return c.json({ error: g.error }, g.status)
+    if (!g.res.ok) return c.json({ error: `upstream ${g.res.status}` }, 502)
+    const buf = new Uint8Array(await g.res.arrayBuffer())
     if (buf.byteLength > MAX_MEDIA_BYTES) return c.json({ error: 'file too large' }, 413)
-    const fallback = decodeURIComponent(url.pathname.split('/').pop() || 'media.mp4')
-    const result = await saveMedia(body.name || fallback, buf)
+    const fallback = decodeURIComponent(g.url.pathname.split('/').pop() || 'media.mp4')
+    const named = nameIncoming('media', buf, { name: body.name || fallback, mime: g.res.headers.get('content-type') ?? '' })
+    if (!named.ok) return c.json({ error: named.error }, 415)
+    const result = await saveMedia(named.name, buf)
     return result.ok ? c.json(result.media, 201) : c.json({ error: result.error }, 400)
   } catch (err) {
     return c.json({ error: String((err as Error).message ?? err) }, 502)
@@ -1167,13 +1178,14 @@ const SPEECH_HOSTS = new Set([
   'api.elevenlabs.io',
   'api.deepgram.com',
   'api.assemblyai.com',
+  'api.cartesia.ai',
 ])
 
 const PRIVATE_HOST =
   /^(localhost|127(\.\d{1,3}){3}|::1|\[::1\]|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}|[\w-]+\.local)$/i
 
 /** Only what a speech API reads. Notably not cookies. */
-const CARRIED = ['content-type', 'authorization', 'xi-api-key', 'accept']
+const CARRIED = ['content-type', 'authorization', 'xi-api-key', 'cartesia-version', 'accept']
 
 function relayTarget(raw: string | undefined): URL | { error: string } {
   if (!raw) return { error: 'missing url' }
