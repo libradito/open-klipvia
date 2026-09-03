@@ -2527,7 +2527,25 @@ export async function initWebMcp(editor, { local = false } = {}) {
     controller?.abort()
     controller = new AbortController()
 
-    if (typeof ctx.registerTool === 'function') {
+    if (via === 'document.modelContext' && typeof document.modelContext.registerTool === 'function') {
+      // The spec surface, spelled out rather than reached through `ctx`, so
+      // that what this app registers is legible at a glance:
+      //
+      //   document.modelContext.registerTool({
+      //     name: 'add_to_timeline',
+      //     description: 'Place media, a clip, a transcript or another timeline…',
+      //     inputSchema: { type: 'object', properties: { … } },
+      //     execute: async (input) => { … },
+      //   })
+      //
+      // Each descriptor carries exactly those four fields (plus `annotations`,
+      // which marks the read-only tools). `signal` lets a re-registration
+      // replace the previous set instead of stacking on it.
+      for (const d of descriptors) {
+        await document.modelContext.registerTool(d, { signal: controller.signal })
+      }
+    } else if (typeof ctx.registerTool === 'function') {
+      // navigator.modelContext, the deprecated alias some builds still expose.
       for (const d of descriptors) {
         await ctx.registerTool(d, { signal: controller.signal })
       }

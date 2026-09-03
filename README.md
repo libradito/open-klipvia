@@ -7,6 +7,59 @@ Author animations in plain HTML / CSS / JS, cut them together with video and
 audio on a timeline, and export either one — a clip with a real alpha channel,
 or a finished film with sound.
 
+## WebMCP Challenge submission
+
+Klipvia is a strong fit for WebMCP because video editing is a long, structured
+workflow rather than a single prompt. The editor exposes its real editing
+operations as in-page tools, allowing a person to direct the creative work
+while an agent performs precise, inspectable actions on the same project and
+timeline.
+
+This makes the experience better in two ways: people can describe an outcome
+instead of manually repeating dozens of edits, and they can immediately inspect,
+adjust, undo, or continue every change through the normal interface. Together,
+a person and an agent can import material, build animations, edit a timeline,
+check layout and timing, and render the result without maintaining a separate
+agent-only copy of the project.
+
+Klipvia implements WebMCP in [`public/webmcp.js`](public/webmcp.js). It registers
+tool descriptors with `document.modelContext.registerTool`, validates tool
+arguments, marks read-only and untrusted-content behavior, and routes each call
+through the same editor facade used by the UI. The complete registration example,
+tool catalogue, security model, and implementation notes are in
+[Agent control (WebMCP)](#agent-control-webmcp).
+
+### Try the challenge build
+
+- **Live app:** _Add the public deployment URL before submitting._
+- **Supported clients:** ChatGPT's in-app browser, or Google Chrome 149 or later
+  with `chrome://flags/#enable-webmcp-testing` enabled.
+- **No account is required** for the browser-only build.
+- On load, confirm that the header shows `webmcp · 84 tools` for the browser-only
+  build (`89 tools` when running with the full server and ffmpeg).
+- Ask the agent to list projects, open the seeded demo, inspect its timeline,
+  make a visible edit, capture a frame, run `check_timeline`, and render it.
+- **Demo video:** _Add the public YouTube URL before submitting._
+
+### Existing project and challenge-period work
+
+Klipvia's editor foundation existed before the challenge. The challenge entry is
+the meaningful WebMCP extension: the in-page tool layer in `public/webmcp.js`, its
+connection to the editor facade, tool input validation and safety annotations,
+agent-visible inspection and editing workflows, and the WebMCP status and setup
+experience described in this README.
+
+Development of that extension began before this Git repository was initialized,
+so the first commit imports work already completed during the submission period
+instead of recording every early change as a separate commit. Later commits show
+continued challenge-period work. This note documents that history limitation
+rather than presenting the initial commit as proof that every imported line was
+written at once.
+
+For judges, the challenge-specific implementation begins at
+[`public/webmcp.js`](public/webmcp.js); the pre-existing product foundation is the
+clip, timeline, media, caption, and rendering editor that those tools operate.
+
 ```bash
 bun install
 bun run dev        # http://localhost:3000
@@ -1477,6 +1530,28 @@ radius, shadow }`.
 
 The editor publishes itself as **WebMCP** tools, so an AI agent running in Chrome
 can create clips, write animation code, look at a frame, and render a video.
+
+### How tools are registered
+
+Every tool is registered on the page's own `document.modelContext`, in
+[`public/webmcp.js`](public/webmcp.js):
+
+```js
+document.modelContext.registerTool({
+  name: 'add_to_timeline',
+  description: 'Place media, an animation clip, a transcript or another timeline on a track.',
+  inputSchema: { type: 'object', properties: { /* … */ }, required: ['kind', 'sourceId'] },
+  execute: async (input) => { /* … drives the same editor facade the UI does … */ },
+})
+```
+
+The file builds one descriptor per tool with exactly those fields, plus
+`annotations.readOnlyHint` on the ones that only read, and registers them in a
+loop against an `AbortSignal`, so re-registering replaces the set rather than
+stacking on it. `navigator.modelContext` is accepted as the deprecated alias.
+
+Every tool calls the same `editor` facade the buttons call, so an agent's edit
+lands in the same undo history as a hand's and shows up in the preview at once.
 
 ### Enable it
 
